@@ -49,7 +49,11 @@ class RunContext:
     traces: list[CallTrace] = field(default_factory=list)
 
     def tool_ok(self, name: str) -> bool:
-        return self.tools_available.get(name, True)
+        # GET /tools may name a tool with or without the otari_ prefix; unknown means "try it".
+        for key in (name, name.removeprefix("otari_")):
+            if key in self.tools_available:
+                return self.tools_available[key]
+        return True
 
     async def chat(self, role: str, model: str, messages: list[dict], **kw) -> ChatResult:
         try:
