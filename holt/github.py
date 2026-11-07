@@ -124,6 +124,14 @@ class GitHub:
         issues = [_to_issue(repo, d, []) for d in data if "pull_request" not in d and d.get("number") != exclude]
         return issues[:limit]
 
+    async def labels(self, repo: str) -> list[str]:
+        """The repository's existing labels, so suggestions match what maintainers already use."""
+        try:
+            data = (await self._get(f"/repos/{repo}/labels", per_page=100)).json()
+        except (LookupError, RuntimeError, httpx.HTTPError):
+            return []
+        return [lbl.get("name", "") for lbl in data if isinstance(lbl, dict)]
+
     async def post_comment(self, ref: IssueRef, body: str) -> str:
         if not self._has_token:
             raise PermissionError("Set GITHUB_TOKEN in .env to post comments.")
