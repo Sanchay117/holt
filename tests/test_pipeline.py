@@ -80,6 +80,18 @@ async def test_guardrail_quarantines_injected_issue(settings):
     assert writer["status"] == "done"
 
 
+async def test_missing_guardrail_profile_degrades_instead_of_failing(settings, monkeypatch):
+    # Hosted otari.ai answers 502 to block mode until a guardrail profile exists (mozilla-ai/otari#2937).
+    monkeypatch.setenv("HOLT_MOCK_NO_GUARDRAIL_SERVICE", "1")
+    events = await collect(ISSUE, settings, candidates=CANDIDATES)
+    guard = steps(events, "guard")[-1]
+    assert guard["status"] == "warn" and guard["output"]["status"] == "unavailable"
+    assert steps(events, "scout")[-1]["status"] == "done"
+    assert events[-1]["ok"] is True
+    features = {f["key"]: f for f in next(e for e in events if e["type"] == "features")["features"]}
+    assert features["guardrails"]["used"] is False  # honest: it didn't run
+
+
 async def test_chaos_policy_falls_back(settings):
     events = await collect(ISSUE, settings, chaos=True)
     trace = steps(events, "writer")[-1]["traces"][0]

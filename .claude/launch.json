@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "holt",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "holt.cli", "serve", "--port", "8787"],
+      "port": 8787
+    }
+  ]
+}

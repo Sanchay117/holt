@@ -149,6 +149,9 @@ class MockOtari:
 
         # Guardrails run on the input before any provider is called.
         verdicts = []
+        if body.get("guardrails") and os.getenv("HOLT_MOCK_NO_GUARDRAIL_SERVICE") == "1":
+            # What hosted otari.ai does before a workspace has a guardrail profile (mozilla-ai/otari#2937).
+            return _json(502, {"detail": "no guardrails service is configured"}, {"Otari-Request-ID": rid})
         for g in body.get("guardrails") or []:
             flagged = bool(INJECTION.search(prompt))
             score = round(random.uniform(0.95, 0.999), 3) if flagged else round(random.uniform(0.001, 0.04), 3)

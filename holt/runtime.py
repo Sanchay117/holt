@@ -170,6 +170,19 @@ class Runtime:
                     "" if ok else "Ask in the Mozilla AI Discord which guardrail profiles otari.ai serves, or mandate one under Organization -> Guardrails.")
             except httpx.HTTPError as exc:
                 add("Guardrail profile", None, f"couldn't list profiles: {exc.__class__.__name__}")
+            # The real test: does a block-mode request go through? (Hosted answers 502 until a profile exists, otari#2937.)
+            try:
+                res = await self.otari.chat(role="guard", model=s.roles["scout"].model, max_tokens=5,
+                                            messages=[{"role": "user", "content": "Reply with: ok"}],
+                                            guardrails=[{"profile": s.guardrail_profile, "mode": "block", "on_unavailable": s.guardrail_on_unavailable}])
+                entry = next((g for g in res.trace.guardrails if g.get("profile") == s.guardrail_profile), None)
+                status = entry.get("status") if entry else "no verdict header"
+                add("Guardrail in block mode", status == "evaluated", f"benign prompt served; verdict: {status}",
+                    "" if status == "evaluated" else "The check didn't run. Configure the guardrail (docs/OTARI_SETUP.md, step 4).")
+            except OtariRefusal as exc:
+                add("Guardrail in block mode", False, f"HTTP {exc.trace.http_status}: {exc.trace.error_detail or exc}",
+                    "Hosted Otari refuses block mode until the workspace has a guardrail profile: docs/OTARI_SETUP.md, step 4. "
+                    "Holt still runs, without the gate.")
         else:
             add("Guardrail profile", False, "HOLT_GUARDRAIL_PROFILE is empty", "Set it to prompt-injection.")
 

@@ -105,6 +105,11 @@ def guard_verdict(trace: CallTrace | None, profile: str | None) -> dict:
     }
 
 
+def _guardrail_service_missing(trace: CallTrace) -> bool:
+    detail = (trace.error_detail or "").lower()
+    return (trace.http_status or 0) >= 500 and "guardrail" in detail
+
+
 def tool_sources(traces: list[CallTrace]) -> list[dict]:
     """Every URL a gateway-run tool actually returned or fetched, in order, de-duplicated."""
     seen: set[str] = set()
@@ -197,9 +202,10 @@ async def run_triage(
             yield _step("guard", "skipped", detail="No guardrail profile configured (HOLT_GUARDRAIL_PROFILE).")
         yield _step("scout", "running", detail="Classifying the issue and planning the investigation.")
 
+        res: ChatResult | None = None
+        scout_model = s.roles["scout"].model
         try:
-            res = await ctx.chat("scout", s.roles["scout"].model, agents.scout_messages(issue), guardrails=guardrails, max_tokens=900, temperature=0.1)
-            scout = agents.parse_json(res.content)
+            res = await ctx.chat("scout", scout_model, agents.scout_messages(issue), guardrails=guardrails, max_tokens=900, temperature=0.1)
             verdict = guard_verdict(res.trace, s.guardrail_profile)
             if s.guardrail_profile:
                 status = "done" if verdict["status"] == "evaluated" else "warn"
@@ -210,17 +216,29 @@ async def run_triage(
                     "not_reported": "Otari didn't report a guardrail verdict for this request.",
                 }.get(verdict["status"], "")
                 yield _step("guard", status, detail=detail, traces=[res.trace], output=verdict)
+        except OtariRefusal as exc:
+            if exc.code == "guardrail_violation":
+                quarantined = True
+                verdict = guard_verdict(exc.trace, s.guardrail_profile)
+                yield _step("guard", "blocked", traces=[exc.trace], output=verdict,
+                            detail="Otari's guardrail flagged this issue as a prompt-injection attempt and refused it before any model saw it. "
+                                   "No agent with tools will read it.")
+                yield _step("scout", "skipped", detail="Blocked upstream by the guardrail.")
+            elif guardrails and _guardrail_service_missing(exc.trace):
+                # Hosted otari.ai answers 5xx to block mode until the workspace has a guardrail profile
+                # (mozilla-ai/otari#2937). Say so, and carry on without the gate rather than failing every run.
+                verdict = {"status": "unavailable", "profile": s.guardrail_profile,
+                           "reason": f"no guardrail profile configured on this workspace (HTTP {exc.trace.http_status})"}
+                yield _step("guard", "warn", traces=[exc.trace], output=verdict,
+                            detail="Otari has no guardrail profile for this workspace, so block mode can't run. "
+                                   "Running the Scout without the gate. Configure one: docs/OTARI_SETUP.md, step 4.")
+                res = await ctx.chat("scout", scout_model, agents.scout_messages(issue), max_tokens=900, temperature=0.1)
+            else:
+                raise
+        if res is not None:
+            scout = agents.parse_json(res.content)
             yield _step("scout", "done", traces=[res.trace], output=scout,
                         detail=scout.get("summary", "") if scout else "The Scout's answer wasn't valid JSON; continuing with the raw issue.")
-        except OtariRefusal as exc:
-            if exc.code != "guardrail_violation":
-                raise
-            quarantined = True
-            verdict = guard_verdict(exc.trace, s.guardrail_profile)
-            yield _step("guard", "blocked", traces=[exc.trace], output=verdict,
-                        detail="Otari's guardrail flagged this issue as a prompt-injection attempt and refused it before any model saw it. "
-                               "No agent with tools will read it.")
-            yield _step("scout", "skipped", detail="Blocked upstream by the guardrail.")
 
         suspicious = [x for x in scout.get("suspicious") or [] if x] if isinstance(scout.get("suspicious"), list) else []
         caution = bool(suspicious)
