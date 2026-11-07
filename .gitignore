@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# Secrets: your Otari key and GitHub token live here. Never commit it.
+.env
+.env.*
+!.env.example
