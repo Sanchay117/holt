@@ -42,8 +42,9 @@ def is_routing_policy(model: str) -> bool:
 class RunContext:
     settings: Settings
     otari: OtariClient
-    user: str | None = None  # Otari end-user id, e.g. "holt:octocat"
+    user: str | None = None  # Otari end-user id, e.g. "holt:octocat"; only sent on a service key
     chaos: bool = False
+    user_note: str | None = None  # why requests aren't billed to a maintainer, if they aren't
     tools_available: dict[str, bool] = field(default_factory=dict)
     traces: list[CallTrace] = field(default_factory=list)
 
@@ -182,7 +183,7 @@ async def run_triage(
          "policy": is_routing_policy(writer_model if r.key == "writer" else r.model)}
         for r in s.roles.values()
     ]
-    yield _event("run", run_id=run_id, issue=issue.to_dict(), user=ctx.user, mock=s.mock, roles=roles, chaos=ctx.chaos)
+    yield _event("run", run_id=run_id, issue=issue.to_dict(), user=ctx.user, user_note=ctx.user_note, mock=s.mock, roles=roles, chaos=ctx.chaos)
 
     quarantined = False
     verdict: dict = {"status": "off"}
@@ -386,13 +387,15 @@ async def run_triage(
 
     budget = await budget_lookup() if budget_lookup else {"available": False, "reason": "not requested"}
     yield _event("budget", **budget)
-    yield _event("features", features=evaluate_features(ctx.traces, budget=budget, verdict=verdict, writer_model=writer_model, user=ctx.user))
+    yield _event("features", features=evaluate_features(ctx.traces, budget=budget, verdict=verdict, writer_model=writer_model,
+                                                         user=ctx.user, user_note=ctx.user_note))
     total = sum(t.cost_usd or 0 for t in ctx.traces)
     yield _event("done", run_id=run_id, elapsed_ms=int((time.perf_counter() - started) * 1000),
                  total_cost_usd=round(total, 6), calls=len(ctx.traces), ok=failure is None)
 
 
-def evaluate_features(traces: list[CallTrace], *, budget: dict, verdict: dict, writer_model: str, user: str | None) -> list[dict]:
+def evaluate_features(traces: list[CallTrace], *, budget: dict, verdict: dict, writer_model: str, user: str | None,
+                      user_note: str | None = None) -> list[dict]:
     """Which Otari capabilities this run actually exercised, with the evidence. Enabled-but-unused counts as unused."""
     calls = [c for t in traces for c in t.tool_calls]
     by_type: dict[str, list[dict]] = {}
@@ -445,5 +448,5 @@ def evaluate_features(traces: list[CallTrace], *, budget: dict, verdict: dict, w
         {"key": "budgets", "label": "Budgets & spend limits", "used": has_budget or budget_seen,
          "evidence": "a budget refused this run" if budget_seen else fmt_budget()},
         {"key": "per_user", "label": "Per-user budgets", "used": per_user or (budget_seen and bool(user)),
-         "evidence": f"billed to end user '{user}'" if user else "no maintainer handle set"},
+         "evidence": f"billed to end user '{user}'" if user else (user_note or "no maintainer handle set")},
     ]

@@ -118,7 +118,7 @@ def create_app() -> FastAPI:
     async def triage(request: Request, body: TriageRequest):
         runtime = rt(request)
         try:
-            user = end_user_id(body.handle)
+            user, user_note = await runtime.billing_user(body.handle)
         except ValueError as exc:
             raise HTTPException(400, str(exc))
 
@@ -148,12 +148,12 @@ def create_app() -> FastAPI:
             raise HTTPException(429, str(exc))
 
         ctx = RunContext(settings=runtime.settings, otari=runtime.otari, user=user, chaos=body.chaos,
-                         tools_available=await runtime.tools_available())
+                         tools_available=await runtime.tools_available(), user_note=user_note)
 
         async def stream():
             try:
                 async for event in run_triage(issue, ctx, candidates=candidates, repo_labels=labels,
-                                              budget_lookup=lambda: runtime.budget(user)):
+                                              budget_lookup=lambda: runtime.budget(end_user_id(body.handle))):
                     yield f"data: {json.dumps(event, default=str)}\n\n"
             except Exception as exc:  # last resort: tell the UI instead of dropping the stream
                 yield f"data: {json.dumps({'type': 'error', 'message': f'{exc.__class__.__name__}: {exc}'})}\n\n"

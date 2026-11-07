@@ -228,7 +228,7 @@
     const i = ev.issue;
     const where = i.url ? `<a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.repo)}#${esc(i.number)}</a>` : `pasted issue${i.repo ? ` for ${esc(i.repo)}` : ""}`;
     $("#issue-head").innerHTML = `<div><div class="title">${esc(i.title)}</div>
-      <div class="meta">${where}${i.author ? ` · by ${esc(i.author)}` : ""}${i.labels?.length ? ` · ${i.labels.map(esc).join(", ")}` : ""}${ev.user ? ` · billed to <span class="mono">${esc(ev.user)}</span>` : " · <span title=\"Set a maintainer handle to use a per-user budget\">no maintainer handle</span>"}</div></div>
+      <div class="meta">${where}${i.author ? ` · by ${esc(i.author)}` : ""}${i.labels?.length ? ` · ${i.labels.map(esc).join(", ")}` : ""}${ev.user ? ` · billed to <span class="mono">${esc(ev.user)}</span>` : ` · <span style="color:var(--warn)">${esc(ev.user_note || "no maintainer handle")}</span>`}</div></div>
       ${ev.mock ? '<span class="gateway-badge mock">mock</span>' : ""}${ev.chaos ? '<span class="tag fallback">fallback drill</span>' : ""}`;
     const purposes = { guard: "Otari's prompt-injection guardrail checks the issue before any model reads it." };
     $("#steps").innerHTML = ROLE_ORDER.map((k) => {

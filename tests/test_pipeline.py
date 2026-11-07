@@ -141,6 +141,28 @@ async def test_client_reads_otari_headers_and_refusals():
     await client.aclose()
 
 
+async def test_ordinary_key_never_sends_user(settings):
+    """On a non-service key Otari refuses a request naming another user (403), so Holt must drop the field."""
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/end-user-budgets"):
+            return httpx.Response(403, json={"detail": "service key required"})
+        seen.append(json.loads(request.content or b"{}"))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
+
+    from holt.github import GitHub
+    rt = Runtime(settings=settings, otari=OtariClient("https://x.invalid/api/v1", "k", transport=httpx.MockTransport(handler)), github=GitHub())
+    user, note = await rt.billing_user("octocat")
+    assert user is None and "service key" in note
+    ctx = RunContext(settings=settings, otari=rt.otari, user=user, user_note=note)
+    events = [e async for e in run_triage(ISSUE, ctx)]
+    assert seen and all("user" not in body for body in seen)
+    per_user = next(f for f in next(e for e in events if e["type"] == "features")["features"] if f["key"] == "per_user")
+    assert per_user["used"] is False and "service key" in per_user["evidence"]
+    await rt.aclose()
+
+
 def test_parse_json_handles_fences_prose_and_think_tags():
     assert agents.parse_json('Sure! ```json\n{"a": 1}\n```') == {"a": 1}
     assert agents.parse_json('<think>{"no": 1}</think> result: {"b": {"c": "}"}} trailing') == {"b": {"c": "}"}}

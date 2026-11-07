@@ -45,12 +45,14 @@ async def _triage(ref: str, handle: str | None, chaos: bool, as_json: bool) -> i
         issue = await rt.github.issue(issue_ref)
         candidates = await rt.github.recent_issues(issue_ref.slug, limit=settings.duplicate_candidates, exclude=issue.number)
         labels = await rt.github.labels(issue_ref.slug)
-        user = end_user_id(handle)
-        ctx = RunContext(settings=settings, otari=rt.otari, user=user, chaos=chaos, tools_available=await rt.tools_available())
+        user, note = await rt.billing_user(handle)
+        ctx = RunContext(settings=settings, otari=rt.otari, user=user, chaos=chaos, tools_available=await rt.tools_available(), user_note=note)
         report = None
         if settings.mock:
             _print("(mock gateway: set OTARI_API_KEY in .env for real runs)\n")
-        async for ev in run_triage(issue, ctx, candidates=candidates, repo_labels=labels, budget_lookup=lambda: rt.budget(user)):
+        if note and handle:
+            _print(f"note: {note}\n")
+        async for ev in run_triage(issue, ctx, candidates=candidates, repo_labels=labels, budget_lookup=lambda: rt.budget(end_user_id(handle))):
             if as_json:
                 _print(json.dumps(ev, default=str))
                 continue

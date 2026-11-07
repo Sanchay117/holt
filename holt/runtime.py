@@ -40,6 +40,29 @@ class Runtime:
     otari: OtariClient
     github: GitHub
     _tools_cache: tuple[float, dict[str, bool]] | None = field(default=None, repr=False)
+    _service_key: bool | None = field(default=None, repr=False)
+
+    async def is_service_key(self) -> bool:
+        """Only a service key may name end users. On an ordinary key, a request naming another
+        `user` is refused with 403 by default, so Holt drops the field there."""
+        if self._service_key is None:
+            try:
+                await self.otari.end_user_budgets()
+                self._service_key = True
+            except PermissionError:
+                self._service_key = False
+            except (httpx.HTTPError, ValueError):
+                return False  # unknown: don't cache, don't risk a 403 on every call
+        return self._service_key
+
+    async def billing_user(self, handle: str | None) -> tuple[str | None, str | None]:
+        """(end-user id to send, note for the UI)."""
+        user = end_user_id(handle)
+        if user is None:
+            return None, "No maintainer handle: requests bill the API key's own user."
+        if not await self.is_service_key():
+            return None, "Per-user budgets are off: OTARI_API_KEY isn't an Otari service key (docs/OTARI_SETUP.md, step 5)."
+        return user, None
 
     @classmethod
     def build(cls, settings: Settings) -> "Runtime":
