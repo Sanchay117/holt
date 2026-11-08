@@ -32,13 +32,13 @@ Then open the policy and, under **Budget tier-down**, switch to `deepseek/deepse
 
 ### Optional: the fallback drill
 
-To show a fallback live in the demo, create a second policy, `holt-writer-drill`, whose main model is guaranteed to fail and whose backup is `z-ai/glm-5.3`. The simplest way, following Otari's own [fallback test](https://docs.otari.ai/how-to-guides/create-a-multi-provider-routing.md#test-the-fallback):
+Optional. The `holt-writer` policy already counts for routing and fallbacks; this only makes a fallback *happen* on camera. It needs a main model that is guaranteed to fail, so your own (deliberately invalid) provider key must be the one Otari tries for it. This follows Otari's [fallback test](https://docs.otari.ai/how-to-guides/create-a-multi-provider-routing.md#test-the-fallback):
 
-1. **Organization → Providers → Add provider key**: add a key for a provider you don't otherwise use (e.g. OpenAI) with a deliberately invalid value, named `drill-broken`. Allow it only for the Holt workspace.
-2. Create `holt-writer-drill`: main model from that provider (e.g. `openai:gpt-5-mini`), backup `z-ai/glm-5.3`.
-3. In `.env`: `HOLT_CHAOS_WRITER_MODEL=holt-writer-drill`.
+1. **Organization → Providers → Add provider key**: pick a provider that serves a model Holt's roles *don't* use, and enter a deliberately invalid key named `drill-broken`. On hosted otari.ai the policy form only lists catalog models, grouped by vendor with their providers underneath. OpenAI's own models (e.g. `gpt-5-mini`) aren't there, so an OpenAI key has nothing to attach to. Instead, choose a provider listed under a model you can pick, ideally one that serves nothing else Holt calls: for example **Amazon Bedrock**, the only provider listed for *GPT OSS Safeguard 120B*.
+2. Create `holt-writer-drill`: main model = that model, backup = `z-ai/glm-5.3`.
+3. In `.env`: `HOLT_CHAOS_WRITER_MODEL=holt-writer-drill`, then run `holt doctor`. The *Fallback drill* line must say **FELL BACK**. If it doesn't, Otari served the main model on its own credential instead of your broken key, and the drill can't be forced this way: drop `HOLT_CHAOS_WRITER_MODEL` and skip it.
 
-The **Fallback drill** toggle appears in the UI. With it on, the Writer card shows *fell back · 2 attempts*: the provider refused the key, and Otari moved to GLM.
+With it working, the **Fallback drill** toggle appears in the UI, and with it on the Writer card shows *fell back · 2 attempts*.
 
 ## 3. Tools
 
