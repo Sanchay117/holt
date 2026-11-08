@@ -6,6 +6,12 @@
       "runtimeExecutable": ".venv/Scripts/python.exe",
       "runtimeArgs": ["-m", "holt.cli", "serve", "--port", "8787"],
       "port": 8787
+    },
+    {
+      "name": "holt-mock",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "holt.cli", "serve", "--port", "8788", "--mock"],
+      "port": 8788
     }
   ]
 }

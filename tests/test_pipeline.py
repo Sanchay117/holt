@@ -180,6 +180,16 @@ def test_analyst_prompt_braces_render():
     assert '"duplicates": [{"number": 0' in msgs[0]["content"] and "{{" not in msgs[0]["content"]
 
 
+async def test_mock_sandbox_runs_large_duplicate_batches(settings):
+    """40 long candidates make a script bigger than Windows' 32k command line; the mock must still run it."""
+    big = [Issue(repo="a/b", number=n, title=f"Routing fallback issue {n}", body="x " * 400 + "fallback routing 529") for n in range(40)]
+    rt = Runtime.build(settings)
+    data, trace = await rt.otari.execute_code(build_script(ISSUE, big), role="analyst")
+    assert len(build_script(ISSUE, big)) > 32767
+    assert parse_output(data["stdout"])["compared"] == 40, data.get("stderr")
+    await rt.aclose()
+
+
 def test_dedupe_script_is_data_safe():
     tricky = Issue(repo="a/b", number=1, title='"""; import os; os.system("x")', body="\\x00 ''' \n")
     script = build_script(tricky, CANDIDATES)

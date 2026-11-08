@@ -315,8 +315,9 @@ class MockOtari:
         await self._pause(0.5, 1.0)
         # Only ever execute Holt's own duplicate-scoring script locally; anything else gets a canned answer.
         if "DATA = json.loads(base64.b64decode(" in code and code.lstrip().startswith("import base64, json, math, re"):
+            # Through stdin: the embedded issue data can exceed Windows' 32k command-line limit.
             proc = await asyncio.to_thread(
-                subprocess.run, [sys.executable, "-I", "-c", code], capture_output=True, text=True, timeout=20
+                subprocess.run, [sys.executable, "-I", "-"], input=code, capture_output=True, text=True, timeout=20
             )
             stdout, stderr, rc = proc.stdout, proc.stderr, proc.returncode
         else:

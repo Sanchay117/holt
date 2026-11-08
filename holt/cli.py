@@ -96,6 +96,7 @@ def main(argv: list[str] | None = None) -> int:
     p_serve = sub.add_parser("serve", help="run the web app")
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8787)
+    p_serve.add_argument("--mock", action="store_true", help="use the built-in mock gateway even if OTARI_API_KEY is set")
     p_tri = sub.add_parser("triage", help="triage one issue in the terminal")
     p_tri.add_argument("issue", help="GitHub issue URL or owner/repo#123")
     p_tri.add_argument("--handle", help="your maintainer handle, billed as an Otari end user")
@@ -111,8 +112,12 @@ def main(argv: list[str] | None = None) -> int:
             pass
 
     if args.cmd == "serve":
+        import os
+
         import uvicorn
 
+        if args.mock:
+            os.environ["HOLT_MOCK"] = "1"  # read by load_settings when the app is imported below
         uvicorn.run("holt.server:app", host=args.host, port=args.port, log_level="info")
         return 0
     if args.cmd == "doctor":
