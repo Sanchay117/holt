@@ -28,6 +28,18 @@ Deadline: **Nov 11, 11:59 PM** (DoraHacks shows 2026-11-12 04:29 IST). Missing i
 
 Before pasting, check that the model names match what `holt doctor` shows Otari actually served.
 
+## Recording the footage
+
+`scripts/record_demo.py` drives the running app in Chrome and captures it at 1080p, then writes `demo-out/VOICEOVER.md`: a script timed to that footage and filled with what happened in the run (models served, guardrail scores, cost). Waits while agents run play at 2× with an on-screen badge; runs that only drain the budget are cut (the script notes where).
+
+```bash
+pip install -e ".[demo]"
+python scripts/record_demo.py --handle your-github-name          # needs OTARI_API_KEY; refuses the mock
+python scripts/record_demo.py mux demo-out/holt-demo.mp4 your-voice.m4a
+```
+
+Set `Maintainer daily` to about $0.05 first so the budget scenes happen in a few runs, and set `HOLT_CHAOS_WRITER_MODEL` to film the fallback drill. The rules want the participant demonstrating the project with their own audio: narrate it yourself, and if you're unsure whether a scripted capture counts, ask in the Mozilla AI Discord or record the same flow by hand following the outline below.
+
 ## Demo video outline (3–5 min, your own words)
 
 The rubric gives 5 points for "the video clearly explains how Otari was integrated and demonstrates the claimed capabilities". Show each feature on screen, not just in slides.

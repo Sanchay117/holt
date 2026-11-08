@@ -85,22 +85,23 @@ textarea { resize: vertical; font-family: var(--mono); font-size: 13px; }
 
 /* ---------- top bar ---------- */
 .topbar {
-  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
-  padding: 14px 24px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 85%, transparent);
-  position: sticky; top: 0; z-index: 10; backdrop-filter: blur(8px);
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: nowrap;
+  padding: 12px 24px; border-bottom: 1px solid var(--line); background: var(--bg);
+  position: sticky; top: 0; z-index: 10;
 }
-.brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.brand { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1 1 auto; }
+.brand > div { min-width: 0; }
 .logo svg { width: 34px; height: 34px; display: block; }
 .logo rect { fill: var(--accent); }
 .logo path { stroke: var(--accent-ink); stroke-width: 3; fill: none; stroke-linecap: round; }
 .brand-name { font-weight: 700; font-size: 18px; letter-spacing: -0.02em; }
-.brand-sub { color: var(--muted); font-size: 12.5px; }
-.top-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.brand-sub { color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.top-right { display: flex; align-items: center; gap: 12px; flex: none; }
 .gateway-badge { font: 600 11px/1 var(--mono); padding: 6px 8px; border-radius: 6px; background: var(--ok-soft); color: var(--ok); text-transform: uppercase; letter-spacing: 0.04em; }
 .gateway-badge.mock { background: var(--warn-soft); color: var(--warn); }
 .handle { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
-.handle input { width: 170px; padding: 7px 10px; font-family: var(--mono); font-size: 12.5px; }
-.budget { width: 236px; }
+.handle input { width: 150px; padding: 7px 10px; font-family: var(--mono); font-size: 12.5px; }
+.budget { width: 220px; }
 .budget-row { display: flex; justify-content: space-between; gap: 10px; font-size: 11.5px; color: var(--muted); margin-bottom: 4px; white-space: nowrap; }
 .budget-row #budget-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .budget-row #budget-value { font-family: var(--mono); color: var(--text); flex: none; }
@@ -134,7 +135,9 @@ main { max-width: 1320px; margin: 0 auto; padding: 22px 24px 40px; }
 .workspace { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: start; }
 .pipeline { display: grid; gap: 12px; min-width: 0; }
 #steps { display: grid; gap: 12px; }
-.sticky { position: sticky; top: 84px; }
+/* The ledger stays pinned beside the run; it scrolls inside itself if it's taller than the screen. */
+.ledger { position: sticky; top: 76px; align-self: start; }
+.ledger > .card { max-height: calc(100vh - 92px); overflow-y: auto; }
 
 /* ---------- issue head ---------- */
 .issue-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
@@ -147,7 +150,7 @@ main { max-width: 1320px; margin: 0 auto; padding: 22px 24px 40px; }
 .step.done { border-left-color: var(--ok); }
 .step.warn { border-left-color: var(--warn); }
 .step.blocked, .step.failed { border-left-color: var(--bad); }
-.step.skipped { opacity: 0.72; }
+.step.skipped, .step.stopped { opacity: 0.72; }
 .step-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .role-icon { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; background: var(--card-2); border: 1px solid var(--line); flex: none; }
 .role-icon svg { width: 16px; height: 16px; stroke: var(--accent); fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
@@ -265,8 +268,11 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
 .foot a { margin-left: 8px; }
 
 @media (max-width: 980px) {
+  .topbar { flex-wrap: wrap; }
+  .top-right { flex-wrap: wrap; flex: 1 1 auto; }
   .workspace { grid-template-columns: 1fr; }
-  .sticky { position: static; }
+  .ledger { position: static; }
+  .ledger > .card { max-height: none; }
   .report-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 640px) {

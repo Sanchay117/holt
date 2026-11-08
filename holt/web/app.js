@@ -214,6 +214,13 @@
       case "features": return renderFeatures(ev.features);
       case "error": return onError(ev);
       case "done":
+        // A refusal can end the run while a step still shows as running: mark those stopped.
+        for (const card of document.querySelectorAll("#steps .step.running")) {
+          card.className = "card step stopped";
+          const st = $(".status", card);
+          st.className = "status stopped";
+          st.textContent = "stopped";
+        }
         $("#t-time").textContent = (ev.elapsed_ms / 1000).toFixed(1) + "s";
         $("#t-cost").textContent = money(ev.total_cost_usd);
         $("#t-calls").textContent = ev.calls;
