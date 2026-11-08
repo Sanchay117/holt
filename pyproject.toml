@@ -14,7 +14,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.23"]
-demo = ["playwright>=1.47", "imageio-ffmpeg>=0.5"]
+demo = ["playwright>=1.47", "imageio-ffmpeg>=0.5", "pillow>=10"]
 
 [project.scripts]
 holt = "holt.cli:main"

@@ -1,15 +1,19 @@
-"""Record Holt's demo footage: drive the running app in Chrome and capture it at 1080p.
+"""Record Holt's demo: drive the running app in Chrome and capture it at 1080p.
 
-    python scripts/record_demo.py --handle your-github-name            # real gateway (needs OTARI_API_KEY)
-    python scripts/record_demo.py --handle test --allow-mock           # dry run against the mock gateway
-    python scripts/record_demo.py mux demo-out/holt-demo.mp4 my-voice.m4a   # put your voice on it
+Voice first (recommended):
+    python scripts/record_demo.py prompter                                   # demo-out/teleprompter.mp4 + script
+    # record yourself reading along, beeps included, then:
+    python scripts/record_demo.py --handle your-github-name --voice my-recording.m4a
+        -> demo-out/holt-demo-final.mp4: the footage shot to your voice's timing, with your audio on it
 
-Writes demo-out/holt-demo.mp4 (silent) and demo-out/VOICEOVER.md, a script timed to the footage
-and filled with what actually happened in this run. You record the voice.
+Footage first:
+    python scripts/record_demo.py --handle your-github-name                  # real gateway (needs OTARI_API_KEY)
+    python scripts/record_demo.py --handle test --allow-mock                 # dry run against the mock gateway
+    python scripts/record_demo.py mux demo-out/holt-demo.mp4 my-voice.m4a    # put a voice on it
 
-The footage is a straight screen capture of the app talking to the gateway. Two edits, both
-visible or listed in VOICEOVER.md: waits while agents run play at 2x with an on-screen badge,
-and repeated runs that only drain the budget are cut.
+The footage is a straight screen capture of the app talking to the gateway. Two kinds of edit: waits
+while agents run are fast-forwarded with an on-screen badge (squeezed to fit your voice's timing), and
+runs that only drain the budget are cut. A scene shorter than its slot holds its last frame.
 """
 
 from __future__ import annotations
@@ -18,6 +22,7 @@ import argparse
 import asyncio
 import base64
 import json
+import os
 import re
 import shutil
 import socket
@@ -33,6 +38,8 @@ import imageio_ffmpeg
 from playwright.async_api import Page, async_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import prompter  # noqa: E402  (sits next to this script)
 OUT = ROOT / "demo-out"
 W, H, SCALE = 1280, 720, 1.5  # CSS viewport; frames come out at 1920x1080
 
@@ -121,6 +128,7 @@ class Recorder:
         self.frames: list[tuple[float, Path]] = []
         self.segments: list[tuple[float, float, float]] = []  # (start, end, playback rate); rate 0 = cut
         self.scenes: list[Scene] = []
+        self.freezes: dict[float, float] = {}  # hold the frame shown just before this moment for N seconds
         self._paused_at: float | None = None
         self.t0 = self.t_end = 0.0
 
@@ -162,7 +170,7 @@ class Recorder:
         if factor <= 1:
             yield
             return
-        await self.page.evaluate("(t) => window.__demo.badge(t)", f"⏩ {factor:g}× speed")
+        await self.page.evaluate("(t) => window.__demo.badge(t)", "⏩ fast-forward while agents run")
         start = time.time()
         try:
             yield
@@ -175,29 +183,79 @@ class Recorder:
         for s, e, rate in self.segments:
             overlap = max(0.0, min(t, e) - max(self.t0, s))
             v -= overlap * (1 - rate)
+        for at, extra in self.freezes.items():
+            if t >= at:
+                v += extra
         return v
+
+    def fit(self, slots: list[dict]) -> list[str]:
+        """Make each filmed scene last exactly as long as its slot in the voiceover.
+
+        Too long: squeeze that scene's fast-forward segments. Too short: hold its last frame. A scripted
+        scene that wasn't filmed gives its time to the scene before it.
+        """
+        warnings: list[str] = []
+        start_of = {s["key"]: s["start"] for s in slots}
+        script_end = slots[-1]["end"] if slots else 0.0
+        filmed = [s for s in self.scenes if s.key in start_of]
+        missing = [s["title"] for s in slots if s["key"] not in {f.key for f in filmed}]
+        if missing:
+            warnings.append("not filmed, previous scene held instead: " + ", ".join(missing))
+        first_frame = self.frames[0][0] if self.frames else self.t0
+        debt = 0.0  # how far the footage has fallen behind the voice so far
+        for i, sc in enumerate(filmed):
+            slot = (start_of[filmed[i + 1].key] if i + 1 < len(filmed) else script_end) - start_of[sc.key]
+            want = slot - debt  # win back any earlier overrun from this scene's slack
+            t0 = max(sc.t, first_frame) if i == 0 else sc.t
+            t1 = filmed[i + 1].t if i + 1 < len(filmed) else self.t_end
+            cur = self.out(t1) - self.out(t0)
+            if cur > want + 0.05:
+                fast = [k for k, (s, e, r) in enumerate(self.segments) if 0 < r < 1 and s >= t0 - 0.05 and e <= t1 + 0.05]
+                length = sum((self.segments[k][1] - self.segments[k][0]) * self.segments[k][2] for k in fast)
+                if length > 0:
+                    keep = max(length - (cur - want), 0.4 * len(fast))
+                    for k in fast:
+                        s, e, r = self.segments[k]
+                        self.segments[k] = (s, e, r * keep / length)
+                    cur = self.out(t1) - self.out(t0)
+            if cur < want - 0.02:
+                self.freezes[t1] = self.freezes.get(t1, 0.0) + (want - cur)
+                debt = 0.0
+            else:
+                debt = max(0.0, cur - want)
+                if debt > 0.3:
+                    warnings.append(f"{sc.title}: {debt:.1f}s over its slot (later scenes will try to win it back)")
+        if debt > 0.3:
+            warnings.append(f"the footage ends {debt:.1f}s after the voiceover")
+        return warnings
 
     def encode(self, mp4: Path) -> float:
         if not self.frames:
             raise RuntimeError("No frames were captured.")
-        times = [self.out(t) for t, _ in self.frames] + [self.out(self.t_end)]
+        times = [self.out(t) for t, _ in self.frames]
         base = times[0]
-        lines = []
-        for i, (_, path) in enumerate(self.frames):
-            d = times[i + 1] - times[i]
-            if d > 0.0005:
-                lines.append(f"file '{path.name}'\nduration {d:.4f}")
-        lines.append(f"file '{self.frames[-1][1].name}'")
-        listing = self.dir / "frames.txt"
-        listing.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        cmd = [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(listing),
-               "-vf", "fps=30,scale=1920:1080:flags=lanczos:in_range=full:out_range=limited,format=yuv420p",
+        end = self.out(self.t_end) - base
+        # Resample onto an exact 30 fps timeline: output frame k shows the newest capture at or before k/30 s.
+        # (Feeding ffmpeg per-image durations instead rounds the many tiny fast-forward frames up and drifts.)
+        seq = self.dir / "seq"
+        seq.mkdir(exist_ok=True)
+        j = 0
+        for k in range(max(1, round(end * 30))):
+            while j + 1 < len(times) and times[j + 1] - base <= k / 30:
+                j += 1
+            target = seq / f"{k:06d}.jpg"
+            try:
+                os.link(self.frames[j][1], target)
+            except OSError:
+                shutil.copyfile(self.frames[j][1], target)
+        cmd = [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-framerate", "30", "-i", str(seq / "%06d.jpg"),
+               "-vf", "scale=1920:1080:flags=lanczos:in_range=full:out_range=limited,format=yuv420p",
                "-color_range", "tv", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
                "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-movflags", "+faststart", str(mp4)]
         subprocess.run(cmd, check=True)
         for s in self.scenes:
             s.t = max(0.0, self.out(s.t) - base)
-        return times[-1] - base
+        return end
 
 
 # Minimum on-screen seconds per scene, sized to its narration at ~2.5 words a second.
@@ -206,14 +264,15 @@ MIN_SECONDS = {"intro": 21, "handle": 11, "triage": 30, "walkthrough": 44, "repo
 
 
 class Director:
-    def __init__(self, page: Page, rec: Recorder, speed: float):
+    def __init__(self, page: Page, rec: Recorder, speed: float, pad_scenes: bool = True):
         self.page = page
         self.rec = rec
         self.speed = speed
+        self.pad_scenes = pad_scenes
 
     async def pad(self) -> None:
-        """Hold the current scene until its narration fits."""
-        if self.rec.scenes:
+        """Hold the current scene until its narration fits (footage-first only: with a voice, fit() does it)."""
+        if self.pad_scenes and self.rec.scenes:
             cur = self.rec.scenes[-1]
             shown = self.rec.out(time.time()) - self.rec.out(cur.t)
             if shown < MIN_SECONDS.get(cur.key, 0):
@@ -329,7 +388,7 @@ async def budget_pct(d: Director, handle: str) -> float | None:
 
 
 async def direct(page: Page, rec: Recorder, args, url: str) -> None:
-    d = Director(page, rec, args.speed)
+    d = Director(page, rec, args.speed, pad_scenes=not getattr(args, "voice", None))
 
     s = await d.begin("intro", "Intro")
     await page.goto(url, wait_until="networkidle")
@@ -400,7 +459,10 @@ async def direct(page: Page, rec: Recorder, args, url: str) -> None:
     await d.hold(6)
     s.facts = await d.facts()
 
-    if await page.locator("#chaos-wrap").is_visible() and issue_url:
+    wanted = getattr(args, "scenes", None)  # set when shooting to a voiceover script
+    if wanted is not None and "fallback" not in wanted:
+        pass
+    elif await page.locator("#chaos-wrap").is_visible() and issue_url:
         s = await d.begin("fallback", "Fallback drill")
         await d.scroll_top()
         await ensure_link_mode(d)
@@ -412,11 +474,11 @@ async def direct(page: Page, rec: Recorder, args, url: str) -> None:
         await d.scroll_to("#step-writer")
         await d.hold(5)
         s.facts = await d.facts()
-        await page.locator("#chaos").uncheck()
+        await page.evaluate("() => { const c = document.querySelector('#chaos'); if (c.checked) c.click(); }")
     else:
         print("  (no fallback drill: set HOLT_CHAOS_WRITER_MODEL to film one)")
 
-    if args.budget_runs > 0:
+    if args.budget_runs > 0 and (wanted is None or "budget" in wanted):
         s = await d.begin("budget", "Per-user budget: tier-down and refusal")
         await d.scroll_top()
         await d.point("#budget")
@@ -458,9 +520,9 @@ async def direct(page: Page, rec: Recorder, args, url: str) -> None:
             await d.run(follow=False)
             await d.scroll_top()
             await d.point("#alert")
-            await d.hold(5)
+            await d.hold(4)
             await d.point("#budget")
-            await d.hold(3)
+            await d.hold(2)
             r.facts = await d.facts()
         else:
             s.notes.append("the budget never ran out; raise --budget-runs or lower the end-user budget")
@@ -515,6 +577,79 @@ def fallback_phrase(tags: list[str]) -> str:
 def dup_numbers(items: list[str]) -> str:
     nums = re.findall(r"#\d+", " ".join(items))[:2]
     return " and ".join(nums)
+
+
+def pretty_model(model_id: str) -> str:
+    """deepseek/deepseek-v4.1-flash -> DeepSeek V4.1 Flash; z-ai/glm-5.3 -> GLM 5.3."""
+    name = re.sub(r"-\d{4}$", "", model_id.split("/")[-1].split(":")[-1])
+    special = {"deepseek": "DeepSeek", "glm": "GLM", "gpt": "GPT", "oss": "OSS", "qwen": "Qwen", "kimi": "Kimi", "llama": "Llama"}
+    words = []
+    for part in name.split("-"):
+        low = part.lower()
+        words.append(special.get(low) or (part.upper() if re.fullmatch(r"v[\d.]+", low) else part if re.match(r"\d", part) else part.capitalize()))
+    return " ".join(words)
+
+
+# Shortest each scene can be on screen, given what the recorder does in it (fast-forwarded waits can shrink).
+FILM_SECONDS = {"intro": 25, "handle": 11, "triage": 14, "walkthrough": 40, "report": 20, "attack": 20, "fallback": 13,
+                "budget": 9, "tierdown": 9, "refusal": 16, "doctor": 15, "outro": 9}
+
+
+def voice_script(settings, *, fallback: bool, budget: bool) -> list[dict]:
+    """The voiceover, written before the footage exists: nothing in it depends on how a particular run goes."""
+    r = settings.roles
+    scout, researcher, analyst = (pretty_model(r[k].model) for k in ("scout", "researcher", "analyst"))
+    writer = r["writer"].model
+    s = [
+        dict(key="intro", title="Intro", hint="Holt's home page and how a run works",
+             text="Hi, I'm [your name]. This is Holt: issue triage for open-source maintainers that resists prompt injection. "
+                  "Issues are written by strangers, and a triage bot with web, MCP and code tools is a perfect target. Holt sends "
+                  "every model call through Otari, Mozilla AI's open-source gateway, and puts Otari's guardrail in front of every model."),
+        dict(key="handle", title="Maintainer handle and budget", hint="typing the handle; the budget meter fills in",
+             text="I enter my maintainer handle. Holt runs on an Otari service key, so I'm an end user on Otari, with my own "
+                  "budget: that's this meter."),
+        dict(key="triage", title="Live triage of a real issue", hint="a real Otari issue; the agents run, fast-forwarded",
+             text="Let's triage a real issue from Otari's own tracker. First the Guard: Otari runs its prompt-injection guardrail "
+                  "in block mode before any model reads the text, and the issue passes. The Scout, on " + scout + ", classifies "
+                  "it. Then two agents run in parallel: the Researcher on " + researcher + ", and the Analyst on " + analyst + ". "
+                  "I've sped this part up."),
+        dict(key="walkthrough", title="What Otari did, step by step", hint="opening the MCP, search and code calls; the features panel",
+             text="Every tool runs inside Otari. Here's the Researcher's MCP call to DeepWiki about the repo's code, then its web "
+                  "search and the sources it found. The Analyst ran Python in Otari's code sandbox to score this issue against "
+                  f"recent ones, then judged which are real duplicates. The Writer goes through my routing policy, {writer}, which "
+                  "has a fallback chain. On the right: every Otari feature this run actually used, read from Otari's own "
+                  "responses, and what the run cost."),
+        dict(key="report", title="The triage report", hint="scrolling through the report and the drafted reply",
+             text="And the report: kind, severity, labels from the repo's own set, the likely code area, related issues, and a "
+                  "reply ready to post. Holt only shows links that a tool actually returned; anything the model made up is dropped."),
+        dict(key="attack", title="Prompt-injection attack", hint="the attack sample; the Guard turns red",
+             text="Now an attack. This issue hides an instruction in an HTML comment, telling the AI to fetch an attacker's URL with "
+                  "its keys. Otari's guardrail checks it before any model reads it, and blocks it. The Researcher and Analyst never "
+                  "run, no code from it executes, and the report is written from metadata only."),
+    ]
+    if fallback:
+        s.append(dict(key="fallback", title="Fallback drill", hint="the Writer card shows 'fell back'",
+                      text="Fallback drill. The Writer now goes through a routing policy whose primary provider is broken on purpose. "
+                           "Otari falls back to the next model on its own; Holt didn't need any retry code."))
+    if budget:
+        s += [
+            dict(key="budget", title="Per-user budget", hint="the budget meter, nearly full",
+                 text="Per-user budgets. I've spent most of my daily cap."),
+            dict(key="tierdown", title="Budget past 80%", hint="the Writer card, served by a cheaper model",
+                 text="Past eighty percent, my routing policy tiers the Writer down to a cheaper model on its own."),
+            dict(key="refusal", title="Budget spent", hint="Otari's refusal and the full meter",
+                 text="And at a hundred percent, Otari refuses the request, scoped to me, and tells me when it resets. Nothing "
+                      "reached a provider, and other maintainers keep their own budgets."),
+        ]
+    s += [
+        dict(key="doctor", title="Setup check", hint="the setup check dialog",
+             text="Check setup runs live checks against Otari: each role's model and routing policy, the tools, the guardrail in "
+                  "block mode, and per-user budgets on the service key."),
+        dict(key="outro", title="Outro", hint="back to the top",
+             text="That's Holt: open-weight models in four roles, every Otari feature in the rubric, and a guardrail between "
+                  "strangers' text and your tools. The code is on GitHub, and Otari comes in at commit d2cd875. Thanks for watching!"),
+    ]
+    return s
 
 
 def voiceover(scenes: list[Scene], total: float, mock: bool) -> str:
@@ -628,6 +763,21 @@ async def record(args) -> int:
             print("No OTARI_API_KEY in .env, so Holt is on its mock gateway. Footage of canned answers can't demonstrate\n"
                   "Otari. Add your key (docs/OTARI_SETUP.md), or pass --allow-mock for a dry run.")
             return 2
+        slots, go = None, None
+        if args.voice:
+            plan = json.loads((OUT / "script.json").read_text(encoding="utf-8"))
+            slots = plan["scenes"]
+            args.scenes = {s["key"] for s in slots}
+            if "fallback" in args.scenes and not cfg["chaos_available"]:
+                print("Your script includes the fallback drill but HOLT_CHAOS_WRITER_MODEL isn't set. Set it, or re-make the\n"
+                      "teleprompter without it (prompter --no-fallback) and re-record the voice.")
+                return 2
+            go = args.offset if args.offset is not None else prompter.find_go(Path(args.voice))
+            if go is None:
+                print("Couldn't hear the teleprompter's 'go' beep in your recording. Pass --offset SECONDS: the moment in your\n"
+                      "recording where the countdown reached 0:00.")
+                return 2
+            print(f"Voice: 0:00 is at {go:.2f}s in {args.voice}; shooting {len(slots)} scenes to its timing.")
         print(f"Recording against the {'MOCK' if cfg['mock'] else 'real Otari'} gateway…", flush=True)
 
         async with async_playwright() as pw:
@@ -646,14 +796,21 @@ async def record(args) -> int:
                 await browser.close()
 
         mp4 = OUT / "holt-demo.mp4"
+        if slots:
+            for w in rec.fit(slots):
+                print(f"  note: {w}")
         print("Encoding…", flush=True)
         total = rec.encode(mp4)
-        (OUT / "VOICEOVER.md").write_text(voiceover(rec.scenes, total, cfg["mock"]), encoding="utf-8")
         (OUT / "timeline.json").write_text(json.dumps([{"key": s.key, "title": s.title, "start": round(s.t, 2), "notes": s.notes,
                                                         "facts": s.facts} for s in rec.scenes], indent=1), encoding="utf-8")
         if not args.keep_frames:
             shutil.rmtree(frames, ignore_errors=True)
-        print(f"Done: {mp4} ({mmss(total)}), script in {OUT / 'VOICEOVER.md'}")
+        if args.voice:
+            final = prompter.align_and_mux(mp4, Path(args.voice), OUT / "holt-demo-final.mp4", go=go)
+            print(f"Done: {final} ({mmss(total)}): footage cut to your voiceover.")
+        else:
+            (OUT / "VOICEOVER.md").write_text(voiceover(rec.scenes, total, cfg["mock"]), encoding="utf-8")
+            print(f"Done: {mp4} ({mmss(total)}), script in {OUT / 'VOICEOVER.md'}")
         return 0
     finally:
         server.terminate()
@@ -663,24 +820,63 @@ async def record(args) -> int:
             server.kill()
 
 
-def mux(video: str, voice: str, out: str | None) -> int:
-    target = out or str(Path(video).with_name(Path(video).stem + "-voiced.mp4"))
-    cmd = [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-i", video, "-i", voice, "-map", "0:v", "-map", "1:a",
-           "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", target]
-    subprocess.run(cmd, check=True)
-    print(f"Wrote {target}")
+def mux(video: str, voice: str, out: str | None, offset: float | None) -> int:
+    target = Path(out or Path(video).with_name(Path(video).stem + "-voiced.mp4"))
+    go = offset if offset is not None else prompter.find_go(Path(voice))
+    if go is None:
+        print("No teleprompter beep found in the recording; using it from the start (pass --offset to shift it).")
+        go = -0.3
+    prompter.align_and_mux(Path(video), Path(voice), target, go=go)
+    print(f"Wrote {target} (voice from {max(0.0, go + 0.3):.2f}s of your recording)")
+    return 0
+
+
+def make_prompter(args) -> int:
+    from holt.config import load_settings
+
+    settings = load_settings(ROOT / ".env")
+    fallback = bool(settings.chaos_writer_model) if args.fallback is None else args.fallback
+    script = voice_script(settings, fallback=fallback, budget=args.budget_runs > 0)
+    cues = prompter.build_cues(script, FILM_SECONDS)
+    OUT.mkdir(exist_ok=True)
+    total = cues[-1].end
+    (OUT / "script.json").write_text(json.dumps({"lead_in": args.lead_in, "total": round(total, 2),
+                                                 "scenes": [c.to_dict() for c in cues]}, indent=1), encoding="utf-8")
+    lines = ["# Holt demo: voiceover script", "",
+             f"Read along with `demo-out/teleprompter.mp4` ({mmss(total)} after a {args.lead_in:g}s countdown). Record with the mic on and",
+             "keep the beeps in your recording: they're how the footage gets lined up with your voice. Then send the file back,",
+             "or run:", "", "```bash", "python scripts/record_demo.py --handle your-name --voice path/to/recording", "```", ""]
+    for c in cues:
+        lines += [f"## {mmss(c.start)}–{mmss(c.end)} · {c.title}", "", f"_On screen: {c.hint}_", "", c.text, ""]
+    (OUT / "VOICEOVER.md").write_text("\n".join(lines), encoding="utf-8")
+    print(f"Rendering the teleprompter ({mmss(total)}, {len(cues)} scenes"
+          + (", with the fallback drill" if fallback else ", no fallback drill") + ")…", flush=True)
+    out = prompter.render(cues, OUT / "teleprompter.mp4", lead_in=args.lead_in)
+    print(f"Done: {out}\nScript: {OUT / 'VOICEOVER.md'}")
     return 0
 
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     if len(sys.argv) > 1 and sys.argv[1] == "mux":
         p = argparse.ArgumentParser(prog="record_demo.py mux")
         p.add_argument("cmd")
         p.add_argument("video")
         p.add_argument("voice")
         p.add_argument("out", nargs="?")
+        p.add_argument("--offset", type=float, help="seconds into the recording where the countdown hit 0:00")
         a = p.parse_args()
-        return mux(a.video, a.voice, a.out)
+        return mux(a.video, a.voice, a.out, a.offset)
+    if len(sys.argv) > 1 and sys.argv[1] == "prompter":
+        p = argparse.ArgumentParser(prog="record_demo.py prompter", description="Make the teleprompter video and voiceover script.")
+        p.add_argument("cmd")
+        p.add_argument("--lead-in", type=float, default=5.0)
+        p.add_argument("--budget-runs", type=int, default=8, help="0 leaves the budget scenes out")
+        g = p.add_mutually_exclusive_group()
+        g.add_argument("--fallback", dest="fallback", action="store_true", default=None, help="include the fallback drill")
+        g.add_argument("--no-fallback", dest="fallback", action="store_false", help="leave the fallback drill out")
+        return make_prompter(p.parse_args())
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--handle", required=True, help="maintainer handle shown in the demo (your GitHub name)")
     p.add_argument("--issue", help="issue to triage (default: newest open Otari issue)")
@@ -690,8 +886,8 @@ def main() -> int:
     p.add_argument("--show", action="store_true", help="show the browser window while recording")
     p.add_argument("--allow-mock", action="store_true", help="record even on the mock gateway (dry run)")
     p.add_argument("--keep-frames", action="store_true")
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
+    p.add_argument("--voice", help="your voiceover recording: shoot the footage to its timing (needs `prompter` first)")
+    p.add_argument("--offset", type=float, help="with --voice: seconds into the recording where the countdown hit 0:00")
     return asyncio.run(record(p.parse_args()))
 
 

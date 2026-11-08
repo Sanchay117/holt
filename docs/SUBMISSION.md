@@ -28,17 +28,23 @@ Deadline: **Nov 11, 11:59 PM** (DoraHacks shows 2026-11-12 04:29 IST). Missing i
 
 Before pasting, check that the model names match what `holt doctor` shows Otari actually served.
 
-## Recording the footage
-
-`scripts/record_demo.py` drives the running app in Chrome and captures it at 1080p, then writes `demo-out/VOICEOVER.md`: a script timed to that footage and filled with what happened in the run (models served, guardrail scores, cost). Waits while agents run play at 2× with an on-screen badge; runs that only drain the budget are cut (the script notes where).
+## Recording the video (voice first)
 
 ```bash
 pip install -e ".[demo]"
-python scripts/record_demo.py --handle your-github-name          # needs OTARI_API_KEY; refuses the mock
-python scripts/record_demo.py mux demo-out/holt-demo.mp4 your-voice.m4a
+python scripts/record_demo.py prompter            # demo-out/teleprompter.mp4 + demo-out/VOICEOVER.md
 ```
 
-Set `Maintainer daily` to about $0.05 first so the budget scenes happen in a few runs, and set `HOLT_CHAOS_WRITER_MODEL` to film the fallback drill. The rules want the participant demonstrating the project with their own audio: narrate it yourself, and if you're unsure whether a scripted capture counts, ask in the Mozilla AI Discord or record the same flow by hand following the outline below.
+1. **Voice.** Play `demo-out/teleprompter.mp4` full screen and read along: the highlighted word moves at the pace the footage will be cut to, and pauses between scenes are built in. Record with the mic on and keep the countdown beeps in the recording (Win+Alt+R records the screen plus mic and system audio; a phone next to the speakers works too). The beeps are how your voice gets lined up with the footage.
+2. **Footage.** With the wallet funded, web access allowed and `Maintainer daily` at about $0.05 (so the budget scenes happen):
+   ```bash
+   python scripts/record_demo.py --handle your-github-name --voice path/to/recording.mp4
+   ```
+   It finds 0:00 in your recording from the beeps (or pass `--offset SECONDS`), drives the app on the real gateway, fits each scene to its slot in your voiceover (fast-forwarding agent waits with an on-screen badge, holding the last frame of short scenes, cutting runs that only drain the budget), and writes `demo-out/holt-demo-final.mp4` with your audio on it.
+
+The script names your configured models but nothing run-specific (no costs or scores), so it stays true for whichever run gets filmed. The fallback drill is in it only if `HOLT_CHAOS_WRITER_MODEL` was set when you made the teleprompter (`--fallback` / `--no-fallback` to choose); `--budget-runs 0` leaves the budget scenes out. Decide both before you record your voice.
+
+The rules want the participant demonstrating the project with their own audio. Your voice covers that; if you're unsure whether a scripted screen capture counts, ask in the Mozilla AI Discord, or record the same flow by hand following the outline below.
 
 ## Demo video outline (3–5 min, your own words)
 
