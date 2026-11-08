@@ -16,6 +16,9 @@ from .otari import OtariClient, OtariRefusal
 from .pipeline import is_routing_policy, looks_open_weight
 
 HANDLE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,38}$")
+NO_FUNDS = {"insufficient_funds", "payment_required"}
+WALLET_FIX = ("Your Otari wallet is empty. Add credits under Billing (if you were promised hackathon credits, ask in the "
+              "Mozilla AI Discord), or add your own provider key so requests don't draw on the wallet.")
 
 
 def end_user_id(handle: str | None) -> str | None:
@@ -153,8 +156,12 @@ class Runtime:
                 return {"check": f"{role.title} {kind}", "ok": True,
                         "detail": f"{role.model} -> {t.served_model or '?'} via {t.provider or '?'} ({ow}{fb}, attempts {t.attempts or 1})", "fix": ""}
             except OtariRefusal as exc:
-                fix = ("Create this routing policy in Otari (Routing -> Policies), see docs/OTARI_SETUP.md."
-                       if is_routing_policy(role.model) else "Pick a model id from the Otari Models page and set it in .env.")
+                if exc.code in NO_FUNDS:
+                    fix = WALLET_FIX
+                elif is_routing_policy(role.model):
+                    fix = "Create this routing policy in Otari (Routing -> Policies), see docs/OTARI_SETUP.md."
+                else:
+                    fix = "Pick a model id from the Otari Models page and set it in .env."
                 return {"check": f"{role.title} model", "ok": False, "detail": f"{role.model}: {exc} {exc.trace.error_detail or ''}".strip(), "fix": fix}
 
         checks.extend(await asyncio.gather(*(ping(r) for r in s.roles.values())))
@@ -162,14 +169,23 @@ class Runtime:
             from .config import Role
             checks.append(await ping(Role("writer", "Fallback drill", s.chaos_writer_model, "", "")))
 
-        avail = await self.tools_available()
-        for tool, label in (("otari_web_search", "Web search"), ("otari_web_fetch", "Web fetch"), ("otari_code_execution", "Code execution")):
-            if not avail:
-                add(label, None, "GET /tools gave no answer; Holt will still declare the tool.")
-            else:
-                ok = avail.get(tool, False)
-                add(label, ok, "available" if ok else "not available on this workspace",
-                    "" if ok else "Enable it under Tools in the Otari dashboard.")
+        try:
+            tools = {str(t.get("id") or t.get("type") or t.get("name")): t for t in await self.otari.tools() if isinstance(t, dict)}
+        except (httpx.HTTPError, ValueError):
+            tools = {}
+        for tool, label, where in (("otari_web_search", "Web search", "Tools -> Web search -> Web access: Allowed"),
+                                   ("otari_web_fetch", "Web fetch", "Tools -> Web search -> Web access: Allowed (it covers fetch too)"),
+                                   ("otari_code_execution", "Code execution", "Tools -> Code execution: Allowed")):
+            info = tools.get(tool)
+            if info is None:
+                add(label, None, "GET /tools didn't list it; Holt will still declare the tool.")
+                continue
+            ok = bool(info.get("available", True))
+            reason = info.get("reason")
+            fix = {"workspace_disabled": f"Switched off for this workspace. In the dashboard: {where}. "
+                                         "'Follow the deployment default' leaves it off on hosted.",
+                   "not_configured": "The deployment has no backend for it; for search, add an organization search key."}.get(reason, f"In the dashboard: {where}.")
+            add(label, ok, "available" if ok else f"not available ({reason or 'no reason given'})", "" if ok else fix)
 
         try:
             async with httpx.AsyncClient(timeout=10) as http:
@@ -186,11 +202,14 @@ class Runtime:
             try:
                 prof = await self.otari.guardrail_profiles()
                 names = [p.get("profile") for p in prof.get("profiles", [])]
-                ok = prof.get("available") and s.guardrail_profile in names
-                add("Guardrail profile", bool(ok),
-                    f"'{s.guardrail_profile}' {'is served' if ok else 'not found'}; profiles: {', '.join(map(str, names)) or 'none'}"
-                    + ("" if prof.get("available") else f" ({prof.get('reason', 'service unavailable')})"),
-                    "" if ok else "Ask in the Mozilla AI Discord which guardrail profiles otari.ai serves, or mandate one under Organization -> Guardrails.")
+                if prof.get("available"):
+                    ok = s.guardrail_profile in names
+                    add("Guardrail profile", ok, f"'{s.guardrail_profile}' {'is served' if ok else 'not found'}; service profiles: {', '.join(map(str, names)) or 'none'}",
+                        "" if ok else "Mandate a guardrail under Organization -> Guardrails with this check name.")
+                else:
+                    # Guardrails an organization configures from the catalog (e.g. Lakera) don't appear in this list.
+                    add("Guardrail profile", None, "no deployment guardrails service to list; organization guardrails don't show here, "
+                        "so the block-mode check below is the real test")
             except httpx.HTTPError as exc:
                 add("Guardrail profile", None, f"couldn't list profiles: {exc.__class__.__name__}")
             # The real test: does a block-mode request go through? (Hosted answers 502 until a profile exists, otari#2937.)
@@ -203,9 +222,12 @@ class Runtime:
                 add("Guardrail in block mode", status == "evaluated", f"benign prompt served; verdict: {status}",
                     "" if status == "evaluated" else "The check didn't run. Configure the guardrail (docs/OTARI_SETUP.md, step 4).")
             except OtariRefusal as exc:
-                add("Guardrail in block mode", False, f"HTTP {exc.trace.http_status}: {exc.trace.error_detail or exc}",
-                    "Hosted Otari refuses block mode until the workspace has a guardrail profile: docs/OTARI_SETUP.md, step 4. "
-                    "Holt still runs, without the gate.")
+                if exc.code in NO_FUNDS:
+                    add("Guardrail in block mode", None, "couldn't test: the model call behind it was refused for lack of funds", WALLET_FIX)
+                else:
+                    add("Guardrail in block mode", False, f"HTTP {exc.trace.http_status}: {exc.trace.error_detail or exc}",
+                        "Hosted Otari refuses block mode until the workspace has a guardrail profile: docs/OTARI_SETUP.md, step 4. "
+                        "Holt still runs, without the gate.")
         else:
             add("Guardrail profile", False, "HOLT_GUARDRAIL_PROFILE is empty", "Set it to prompt-injection.")
 
