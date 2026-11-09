@@ -310,11 +310,21 @@ class OtariClient:
         detail = ""
         try:
             body = resp.json()
-            code = code or body.get("code")
-            d = body.get("detail")
-            detail = d if isinstance(d, str) else json.dumps(d)[:400]
         except ValueError:
+            body = None
             detail = resp.text[:400]
+        if isinstance(body, dict):
+            code = code or body.get("code")
+            d = body.get("detail", body.get("error"))
+            if isinstance(d, dict):
+                # Hosted Otari nests refusals: {"detail": {"message", "code", "guardrails": [...]}}, with no Otari-Error-Code header.
+                code = code or d.get("code") or d.get("type")
+                detail = str(d.get("message") or json.dumps(d)[:400])
+                if d.get("guardrails") and not trace.guardrails:
+                    trace.guardrails = [{"profile": g.get("profile"), "mode": "block", "valid": False, "score": g.get("score"),
+                                         "status": "evaluated"} for g in d["guardrails"] if isinstance(g, dict)]
+            elif d is not None:
+                detail = d if isinstance(d, str) else json.dumps(d)[:400]
         trace.error_code = code
         trace.error_detail = detail
         trace.budget_scope = resp.headers.get("otari-budget-scope")

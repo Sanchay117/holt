@@ -219,3 +219,19 @@ def test_access_code_gate(monkeypatch, tmp_path):
         assert client.get("/api/budget", params={"handle": "a"}, headers={"X-Holt-Access": "wrong"}).status_code == 401
         assert client.get("/api/budget", params={"handle": "a"}, headers={"X-Holt-Access": "s3cret"}).status_code == 200
         assert client.get("/").status_code == 200  # the page itself loads, then asks for the code
+
+
+async def test_hosted_guardrail_refusal_shape_is_understood():
+    """Hosted Otari nests the refusal in detail and sends no Otari-Error-Code header (seen live, Nov 2026)."""
+    def handler(request):
+        return httpx.Response(403, json={"detail": {"message": "Request blocked by guardrail policy.", "code": "guardrail_violation",
+                                                    "guardrails": [{"profile": "lakera-guard", "explanation": None, "score": 1.0}]}})
+    client = OtariClient("https://x.invalid/api/v1", "k", transport=httpx.MockTransport(handler))
+    with pytest.raises(OtariRefusal) as info:
+        await client.chat(role="scout", model="m", messages=[], guardrails=[{"profile": "lakera-guard", "mode": "block"}])
+    t = info.value.trace
+    assert info.value.code == "guardrail_violation" and t.error_detail == "Request blocked by guardrail policy."
+    assert t.guardrails == [{"profile": "lakera-guard", "mode": "block", "valid": False, "score": 1.0, "status": "evaluated"}]
+    from holt.pipeline import guard_verdict
+    assert guard_verdict(t, "lakera-guard")["status"] == "blocked" and guard_verdict(t, "lakera-guard")["score"] == 1.0
+    await client.aclose()

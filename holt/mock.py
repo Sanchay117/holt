@@ -159,9 +159,10 @@ class MockOtari:
                              "score": score, "status": "evaluated"})
             if flagged and g.get("mode") == "block":
                 await self._pause(0.3, 0.6)
-                return _json(403, {"detail": f"Guardrail '{g.get('profile')}' flagged the input", "code": "guardrail_violation"},
-                             {"Otari-Error-Code": "guardrail_violation", "Otari-Request-ID": rid,
-                              "Otari-Guardrails": json.dumps(verdicts)})
+                # The shape hosted Otari really sends: code nested in detail, no Otari-Error-Code header.
+                return _json(403, {"detail": {"message": "Request blocked by guardrail policy.", "code": "guardrail_violation",
+                                              "guardrails": [{"profile": g.get("profile"), "explanation": None, "score": score}]}},
+                             {"Otari-Request-ID": rid})
 
         role = "writer"
         for name in ("Scout", "Researcher", "Analyst"):
