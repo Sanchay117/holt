@@ -54,18 +54,24 @@ Python 3.12, FastAPI, httpx, server-sent events, and a no-build vanilla JS UI, o
 - **Repo + branch:** https://github.com/Sanchay117/holt, `mozfest-devs-wilding`
 - **First commit using Otari:** https://github.com/Sanchay117/holt/commit/d2cd875796a78b8f1f87ee1025464b780d08b928
 - **Otari features used:** routing & fallbacks, MCP, web search & web fetch, code execution, budgets & spending limits, multiple models in distinct roles, guardrails, per-user budgets
-- **Issues/PRs on the Otari repo:** ✍️ *[list any you opened, or write "none"]*
+- **Issues/PRs on the Otari repo:** none opened; the hosted behaviours I hit are listed above and in the feedback below
 - **Demo video:** https://youtu.be/57wmDMeDdXs
 
 ## Otari feedback
 
-✍️ *Answer these in your own words before you submit, and delete this line.*
-
 **When were you most tempted to skip Otari and call the provider directly? What happened?**
-✍️ *[your answer]*
+
+When the hackathon credits hadn't arrived. My organization's balance sat at $0.00 for hours, with no welcome credit or voucher, so every model call came back `insufficient_funds` and I couldn't run a single real triage; a provider key would have worked straight away. Several people on Discord had the same problem.
+
+The second time was the guardrail. With Lakera in block mode, Holt's runs started failing instead of quarantining the issue, because hosted Otari returns the refusal as `{"detail": {"code": "guardrail_violation", ...}}` with no `Otari-Error-Code` header, which differs from the documented error shape. It also flagged 13 of the 20 newest real Otari issues as prompt injection, so for real triage I had to choose between a strict gate and usable results.
 
 **What did you end up building yourself that Otari should've done for you?**
-✍️ *[your answer]*
+
+- **A setup checker** (`holt doctor`) that probes each role's model or routing policy, tool availability, whether a block-mode guardrail actually runs, stored MCP servers and end-user budgets. One "is this workspace ready for this key?" endpoint would replace it.
+- **Workarounds for hosted-specific behaviour:** the nested refusal shape, the 502 before a guardrail profile exists (#2937), inline MCP servers being refused (I fall back to stored servers), and new end users not landing on the key's end-user budget unless each request names it.
+- **A mock gateway** that speaks Otari's wire format, so I could build and test without spending credits. A test-mode key would do this.
+- **A way to show a fallback.** I couldn't trigger one on purpose, because the policy form only offers catalog models. A "simulate primary failure" switch on routing policies would make fallbacks demoable.
 
 **If the rules hadn't required Otari, would you have kept using it? Why or why not?**
-✍️ *[your answer]*
+
+Yes. One request carries the whole agent: web search, fetch, code execution and MCP run inside Otari's tool loop, and `otari_tool_calls` shows exactly what each tool returned. That's what let Holt show only the links a tool really returned. The `Otari-Model`, `Otari-Fallback` and `usage.cost_usd` fields gave per-call observability for free, and service keys plus the `user` field gave per-maintainer budgets with one field, which would have been a week of work on my own. What would make me hesitate in production is the guardrail false-positive rate, and the gaps between hosted behaviour and the docs.
