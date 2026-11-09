@@ -264,11 +264,46 @@ def find_go(path: Path, search: float = 120.0) -> float | None:
     return None
 
 
-def align_and_mux(video: Path, voice: Path, out: Path, *, go: float) -> Path:
+TARGET_LUFS = -14.0  # YouTube's reference loudness
+
+
+def _loudness(path: Path, chain: str) -> dict:
+    """Measure what loudnorm sees after `chain` (ffmpeg's EBU R128 analysis)."""
+    import json
+    err = subprocess.run([ffmpeg(), "-hide_banner", "-i", str(path), "-vn", "-af",
+                          f"{chain},loudnorm=I={TARGET_LUFS}:TP=-1.0:LRA=9:print_format=json", "-f", "null", "-"],
+                         capture_output=True, text=True).stderr
+    return json.loads(err[err.rindex("{"):err.rindex("}") + 1])
+
+
+def voice_chain(voice: Path, start: float) -> str:
+    """Clean the voice, bring it up to speech level, even it out, then normalise it exactly (two passes)."""
+    trim = f"atrim=start={start:.3f},asetpts=PTS-STARTPTS"
+    clean = "highpass=f=80,lowpass=f=13000,afftdn=nr=14:nf=-60:tn=1"  # before any gain, so the hiss isn't boosted first
+    raw = _loudness(voice, f"{trim},{clean}")
+    gain = max(0.0, min(30.0, -22.0 - float(raw["input_i"])))  # to roughly -22 LUFS, where the compressor can work
+    pre = f"{trim},{clean},volume={gain:.1f}dB,acompressor=threshold=-24dB:ratio=3:attack=8:release=220:makeup=2"
+    m = _loudness(voice, pre)
+    norm = (f"loudnorm=I={TARGET_LUFS}:TP=-1.0:LRA=9:measured_I={m['input_i']}:measured_TP={m['input_tp']}:"
+            f"measured_LRA={m['input_lra']}:measured_thresh={m['input_thresh']}:offset={m['target_offset']}:linear=true")
+    return f"{pre},{norm},alimiter=limit=0.891:level=false"
+
+
+def prepare_voice(voice: Path, out_wav: Path, *, go: float) -> Path:
+    """The cleaned, levelled voice on the video's timeline: its 0:00 is the footage's 0:00."""
     start = go + 0.3  # skip the beep itself
-    audio = (f"[1:a]atrim=start={start:.3f},asetpts=PTS-STARTPTS,adelay=300|300,"
-             "highpass=f=80,afftdn=nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11[a]")
-    subprocess.run([ffmpeg(), "-y", "-loglevel", "error", "-i", str(video), "-i", str(voice), "-filter_complex", audio,
-                    "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
-                    "-t", f"{media_duration(video):.2f}", "-movflags", "+faststart", str(out)], check=True)
+    subprocess.run([ffmpeg(), "-y", "-loglevel", "error", "-i", str(voice), "-af", f"{voice_chain(voice, start)},adelay=300|300",
+                    "-ar", "48000", "-ac", "1", str(out_wav)], check=True)
+    return out_wav
+
+
+def mux(video: Path, wav: Path, out: Path) -> Path:
+    subprocess.run([ffmpeg(), "-y", "-loglevel", "error", "-i", str(video), "-i", str(wav), "-map", "0:v", "-map", "1:a",
+                    "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-t", f"{media_duration(video):.2f}",
+                    "-movflags", "+faststart", str(out)], check=True)
     return out
+
+
+def align_and_mux(video: Path, voice: Path, out: Path, *, go: float) -> Path:
+    wav = prepare_voice(voice, out.with_suffix(".voice.wav"), go=go)
+    return mux(video, wav, out)

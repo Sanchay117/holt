@@ -864,15 +864,16 @@ async def record(args) -> int:
         (OUT / "timeline.json").write_text(json.dumps(timeline, indent=1), encoding="utf-8")
         if not args.keep_frames:
             shutil.rmtree(frames, ignore_errors=True)
+        wav, subs = voice_and_subs(Path(args.voice), go, not args.no_subtitles) if args.voice else (None, [])
         if args.no_motion:
             subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-i", str(raw), "-vf", "scale=1920:1080:flags=lanczos",
                             "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-movflags", "+faststart", str(mp4)], check=True)
         else:
             print("Motion graphics…", flush=True)
-            motion.compose(raw, timeline, mp4, presenter=args.presenter, repo=args.repo)
-        if args.voice:
-            final = prompter.align_and_mux(mp4, Path(args.voice), OUT / "holt-demo-final.mp4", go=go)
-            print(f"Done: {final} ({mmss(total)}): footage cut to your voiceover.")
+            motion.compose(raw, timeline, mp4, presenter=args.presenter, repo=args.repo, subtitles=subs)
+        if wav:
+            final = prompter.mux(mp4, wav, OUT / "holt-demo-final.mp4")
+            print(f"Done: {final} ({mmss(total)}): footage cut to your voiceover" + (", subtitles in holt-demo.srt too." if subs else "."))
         else:
             (OUT / "VOICEOVER.md").write_text(voiceover(rec.scenes, total, cfg["mock"]), encoding="utf-8")
             print(f"Done: {mp4} ({mmss(total)}), script in {OUT / 'VOICEOVER.md'}")
@@ -921,6 +922,21 @@ def make_prompter(args) -> int:
     return 0
 
 
+def voice_and_subs(voice: Path, go: float, with_subs: bool) -> tuple[Path, list]:
+    """Clean and level the voice onto the video timeline, then (optionally) transcribe it into subtitles."""
+    print("Voice: cleaning and levelling…", flush=True)
+    wav = prompter.prepare_voice(voice, OUT / "voice.wav", go=go)
+    subs: list = []
+    if with_subs:
+        import subtitles
+        print("Subtitles: transcribing your voice locally (Whisper)…", flush=True)
+        words = subtitles.transcribe(wav)
+        (OUT / "words.json").write_text(json.dumps(words), encoding="utf-8")
+        subs = subtitles.lines(words)
+        (OUT / "holt-demo.srt").write_text(subtitles.srt(subs), encoding="utf-8")
+    return wav, subs
+
+
 def _git_name() -> str:
     try:
         return subprocess.run(["git", "config", "user.name"], capture_output=True, text=True, cwd=ROOT).stdout.strip() or "Holt"
@@ -947,12 +963,16 @@ def main() -> int:
         p.add_argument("--repo", default="")
         p.add_argument("--voice", help="also lay this voiceover on the result")
         p.add_argument("--offset", type=float)
+        p.add_argument("--no-subtitles", action="store_true")
         a = p.parse_args()
         timeline = json.loads((OUT / "timeline.json").read_text(encoding="utf-8"))
-        out = motion.compose(OUT / "holt-demo-raw.mp4", timeline, OUT / "holt-demo.mp4", presenter=a.presenter, repo=a.repo)
+        wav, subs = None, []
         if a.voice:
             go = a.offset if a.offset is not None else prompter.find_go(Path(a.voice))
-            out = prompter.align_and_mux(out, Path(a.voice), OUT / "holt-demo-final.mp4", go=go or -0.3)
+            wav, subs = voice_and_subs(Path(a.voice), go if go is not None else -0.3, not a.no_subtitles)
+        out = motion.compose(OUT / "holt-demo-raw.mp4", timeline, OUT / "holt-demo.mp4", presenter=a.presenter, repo=a.repo, subtitles=subs)
+        if wav:
+            out = prompter.mux(out, wav, OUT / "holt-demo-final.mp4")
         print(f"Done: {out}")
         return 0
     if len(sys.argv) > 1 and sys.argv[1] == "prompter":
@@ -975,6 +995,7 @@ def main() -> int:
     p.add_argument("--keep-frames", action="store_true")
     p.add_argument("--voice", help="your voiceover recording: shoot the footage to its timing (needs `prompter` first)")
     p.add_argument("--no-motion", action="store_true", help="skip the motion-graphics pass (plain 1080p recording)")
+    p.add_argument("--no-subtitles", action="store_true", help="don't transcribe the voiceover into subtitles")
     p.add_argument("--presenter", default=_git_name(), help="name on the opening lower-third")
     p.add_argument("--repo", default="", help="repo URL for the end card")
     p.add_argument("--offset", type=float, help="with --voice: seconds into the recording where the countdown hit 0:00")

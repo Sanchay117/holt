@@ -18,7 +18,7 @@ import imageio_ffmpeg
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 OW, OH, FPS = 1920, 1080, 30
-WX, WY, WW, WH, RADIUS = 128, 104, 1664, 936, 22  # the window the recording sits in
+WX, WY, WW, WH, RADIUS = 160, 100, 1600, 900, 22  # the window the recording sits in; subtitles go below it
 EASE_S = 0.6
 
 INK = (7, 8, 10)
@@ -105,7 +105,8 @@ class Focus:
 
 
 class Compositor:
-    def __init__(self, timeline: dict, src_size: tuple[int, int], total: float, presenter: str, repo: str):
+    def __init__(self, timeline: dict, src_size: tuple[int, int], total: float, presenter: str, repo: str,
+                 subtitles: list[tuple[float, float, str]] | None = None):
         self.sw, self.sh = src_size
         self.scale = self.sw / 1280  # CSS px -> source px (the page was captured at a 1280-wide viewport)
         self.total = total
@@ -132,6 +133,9 @@ class Compositor:
         self.end_start = (outro["start"] + 1.6) if outro else max(0.0, total - 8)
         self.end_card = self._end_card()
         self.lower_third = self._lower_third()
+        f_sub = font(33, *SEMI)
+        self.subs = [(s, e, pill(text, f_sub, bg=(8, 9, 12, 210), dot=None, pad=(24, 9), outline=(255, 255, 255, 18)))
+                     for s, e, text in (subtitles or [])]
 
     # ---------------------------------------------------------------- statics
 
@@ -330,6 +334,15 @@ class Compositor:
         if a > 0:
             layer.alpha_composite(with_alpha(self.lower_third, a), (WX + 40 + int(-30 * (1 - a)), WY + WH - 112 - 40))
 
+        # subtitles, in the band under the window
+        sub = next(((s, e, img) for s, e, img in self.subs if s <= t < e), None)
+        if sub:
+            s, e, img = sub
+            a = fade(t, s, e, 0.12)
+            if a > 0:
+                y = WY + WH + (OH - WY - WH - img.height) // 2 - 2
+                layer.alpha_composite(with_alpha(img, a), ((OW - img.width) // 2, y))
+
         # end card
         if t >= self.end_start:
             layer.alpha_composite(with_alpha(self.end_card, ease((t - self.end_start - 0.3) / 0.9)))
@@ -349,9 +362,10 @@ def probe(path: Path) -> tuple[int, int, float]:
     return int(size[1]), int(size[2]), int(dur[1]) * 3600 + int(dur[2]) * 60 + float(dur[3])
 
 
-def compose(raw: Path, timeline: dict, out: Path, *, presenter: str, repo: str = "") -> Path:
+def compose(raw: Path, timeline: dict, out: Path, *, presenter: str, repo: str = "",
+            subtitles: list[tuple[float, float, str]] | None = None) -> Path:
     sw, sh, total = probe(raw)
-    comp = Compositor(timeline, (sw, sh), total, presenter, repo)
+    comp = Compositor(timeline, (sw, sh), total, presenter, repo, subtitles)
     ff = imageio_ffmpeg.get_ffmpeg_exe()
     dec = subprocess.Popen([ff, "-loglevel", "error", "-i", str(raw), "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
                            stdout=subprocess.PIPE)
