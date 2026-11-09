@@ -16,5 +16,7 @@ services:
         sync: false
       - key: HOLT_MCP_SERVER_IDS
         sync: false
+      # Hosted Otari workspaces refuse MCP servers named by URL, so DeepWiki goes in as a stored server
+      # (Tools -> MCP servers) whose id is HOLT_MCP_SERVER_IDS. Set this to "1" only if your workspace allows it.
       - key: HOLT_DEEPWIKI_MCP
-        value: "1"
+        value: "0"
