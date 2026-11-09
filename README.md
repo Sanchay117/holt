@@ -8,6 +8,10 @@ Paste a GitHub issue. Holt's agents check it for prompt injection, classify it, 
 
 Built for MozFest **Developers Wilding: Online**, on the `mozfest-devs-wilding` branch.
 
+### ▶ [Watch the demo (3 min)](https://youtu.be/57wmDMeDdXs)
+
+[![Holt demo: live triage on Otari, a blocked prompt-injection attack, per-user budgets](https://img.youtube.com/vi/57wmDMeDdXs/maxresdefault.jpg)](https://youtu.be/57wmDMeDdXs)
+
 ---
 
 ## Why

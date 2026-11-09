@@ -8,7 +8,7 @@ Deadline: **Nov 11, 11:59 PM** (DoraHacks shows 2026-11-12 04:29 IST). Missing i
 - [ ] Starred https://github.com/mozilla-ai/otari
 - [ ] Repo is public on GitHub, with the `mozfest-devs-wilding` branch pushed
 - [ ] `holt doctor` all green on the real gateway; at least one full live run done
-- [ ] Demo video, 3–5 min: a screen recording with your own voice. **No AI voice or AI-generated video.**
+- [x] Demo video: https://youtu.be/57wmDMeDdXs
 - [ ] Otari feedback: a 3–5 min screen recording, written answers, or both. Also no AI.
 - [ ] Any issues or PRs you opened on mozilla-ai/otari
 - [ ] DoraHacks form filled in (fields below)
