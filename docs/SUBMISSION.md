@@ -74,13 +74,25 @@ Tip: set the `Maintainer daily` budget to about $0.05 before recording so step 5
 
 ## Feedback notes
 
-Your feedback has to be your own experience, in your own words: verify these on your workspace before using any of them. These are things that came up while building Holt that may be worth raising:
+Your feedback has to be your own experience, in your own words. These are the things that actually happened while building Holt on hosted otari.ai (Nov 2026); use the ones you agree with.
 
-- **Guardrail block mode on hosted returns 502 before a profile exists** (already open: mozilla-ai/otari#2937). From a client it looks like an outage; Holt has to sniff the error text to tell the two apart.
-- **Model id formats differ by doc.** Self-hosted docs use `provider:model` (`openai:gpt-4o`), hosted docs use `vendor/model` (`deepseek/deepseek-v4-pro-0813`). It's unclear which one routing-policy entries and allow-lists expect on hosted.
-- **How a request-level guardrail `profile` maps to a hosted mandate's "check name"** isn't stated in the hosted how-to.
-- **`GET /tools` response shape** isn't in the hosted docs; Holt has to parse it defensively to decide which tools to declare.
-- **What worked well:** the `Otari-Model` / `Otari-Fallback` / `Otari-Attempt-Count` headers and `usage.cost_usd` make observability easy; `otari_tool_calls` gives the real tool inputs and outputs (search sources, MCP output, code stdout), which is what made "only show links a tool returned" possible; inline `mcp_servers` meant no MCP client code at all; service keys + `user` gave per-user budgets with one field.
+**What got in the way**
+- **Hackathon credits didn't arrive.** The wallet sat at $0.00 with no welcome credit or voucher, so every model call failed with `insufficient_funds` until the $20 came through later; several people on Discord had the same problem.
+- **Lakera (via an organization guardrail) flagged 13 of the 20 newest real Otari issues as prompt injection**, most at score 1.0. In block mode, ordinary bug reports full of JSON, curl and error text get quarantined, which makes a strict gate hard to use for real triage. Even "Reply with: ok" scored 0.4.
+- **A guardrail refusal on hosted puts its code inside `detail`** (`{"detail": {"message", "code": "guardrail_violation", "guardrails": [...]}}`) and sends no `Otari-Error-Code` header, unlike the documented error shape. Holt treated blocked issues as crashes until it handled that.
+- **Block mode returned 502 before a guardrail profile existed** (mozilla-ai/otari#2937), and a request-level `profile` only works when it matches the mandate's name (`lakera-guard`); asking for `prompt-injection` came back `not_configured`.
+- **Inline `mcp_servers` are refused on a hosted workspace** ("does not let a request name MCP servers by URL"), so DeepWiki had to be added as a stored server; the docs present inline servers as the main path.
+- **A new end user isn't put on the key's end-user budget unless the request names it** (`Otari-End-User-Budget`), because the budget wasn't the default; until then maintainers were uncapped.
+- **Model id formats differ by doc**: self-hosted uses `provider:model`, hosted uses `vendor/model`.
+- **No fallback drill was possible**: the policy form only offers catalog models, so a deliberately broken BYO provider key had no model to attach to.
+
+**What worked well**
+- `Otari-Model`, `Otari-Provider`, `Otari-Attempt-Count`, `Otari-Fallback` and `usage.cost_usd` on every response made the whole UI's observability possible, with no extra calls.
+- `otari_tool_calls` reports what each gateway tool really did (search sources, fetched URLs, MCP output, code and stdout), which is what made "only show links a tool returned" possible.
+- Web search, web fetch, code execution and stored MCP servers all run inside the gateway's tool loop: no tool-calling code in Holt at all.
+- Service keys plus the `user` field gave per-user budgets with one field, and a refusal says which budget refused and when it resets.
+- `GET /tools` gives availability with a reason (`workspace_disabled`), which turned a confusing failure into a one-line fix.
+- A full triage (4 open-weight models, ~9 tool calls) cost $0.04–0.18.
 
 Written questions to answer yourself:
 
