@@ -8,6 +8,13 @@
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
     set(k, v) { try { localStorage.setItem(k, v); } catch { /* storage unavailable */ } },
   };
+  // A deployed Holt can require an access code (HOLT_ACCESS_CODE): send it with every API call.
+  const api = async (url, opts = {}) => {
+    const code = store.get("holt.access");
+    const resp = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), ...(code ? { "X-Holt-Access": code } : {}) } });
+    if (resp.status === 401) showLock("That access code didn't work.");
+    return resp;
+  };
 
   const ROLE_ORDER = ["guard", "scout", "researcher", "analyst", "writer"];
   const FEATURES = [
@@ -82,6 +89,18 @@
       $("#form").requestSubmit();
     });
     $("#doctor-btn").addEventListener("click", openDoctor);
+    $("#unlock").addEventListener("click", () => {
+      store.set("holt.access", $("#access").value.trim());
+      $("#lock").hidden = true;
+      refreshBudget();
+    });
+    if (config.locked && !store.get("holt.access")) showLock();
+  }
+
+  function showLock(msg) {
+    $("#lock-msg").textContent = msg || "This Holt is private. Enter the access code to use it.";
+    $("#lock").hidden = false;
+    $("#access").focus();
   }
 
   function setPaste(on) {
@@ -95,7 +114,7 @@
     if (!btn || run?.busy) return;
     btn.disabled = true;
     try {
-      const r = await fetch(`/api/latest?repo=${encodeURIComponent(btn.dataset.repo)}`);
+      const r = await api(`/api/latest?repo=${encodeURIComponent(btn.dataset.repo)}`);
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || r.statusText);
       setPaste(false);
@@ -115,7 +134,7 @@
     if (!data) {
       if (!handle) return paintBudget({ available: false, reason: "Set a maintainer handle to get a per-user budget." });
       try {
-        const r = await fetch(`/api/budget?handle=${encodeURIComponent(handle)}`);
+        const r = await api(`/api/budget?handle=${encodeURIComponent(handle)}`);
         data = await r.json();
         if (!r.ok) data = { available: false, reason: data.error };
       } catch { data = { available: false, reason: "Budget lookup failed." }; }
@@ -170,7 +189,7 @@
   }
 
   async function stream(url, body, onEvent) {
-    const resp = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const resp = await api(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (!resp.ok) {
       let msg = resp.statusText;
       try { msg = (await resp.json()).error || msg; } catch { /* not JSON */ }
@@ -465,7 +484,7 @@
       if (!confirm(`Post this reply as a comment on ${r.issue.ref}? It will be public.`)) return;
       btn.disabled = true;
       try {
-        const resp = await fetch("/api/comment", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ref: r.issue.url, body: $("#reply-text").value }) });
+        const resp = await api("/api/comment", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ref: r.issue.url, body: $("#reply-text").value }) });
         const j = await resp.json();
         if (!resp.ok) throw new Error(j.error || resp.statusText);
         btn.outerHTML = `<a class="btn" href="${esc(j.url)}" target="_blank" rel="noopener">Posted ↗</a>`;
@@ -508,7 +527,7 @@
     $("#doctor-body").textContent = "Running live checks against the gateway…";
     dlg.showModal();
     try {
-      const { checks } = await (await fetch("/api/doctor")).json();
+      const { checks } = await (await api("/api/doctor")).json();
       $("#doctor-body").innerHTML = checks.map((c) => {
         const [cls, mark] = c.ok === true ? ["ok", "✓"] : c.ok === false ? ["no", "✕"] : ["unk", "?"];
         return `<div class="check"><span class="mark ${cls}">${mark}</span><b>${esc(c.check)}</b><div class="detail">${esc(c.detail)}${c.fix && c.ok !== true ? `<div class="fix">${esc(c.fix)}</div>` : ""}</div></div>`;

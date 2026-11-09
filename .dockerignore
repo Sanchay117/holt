@@ -1,0 +1,10 @@
+.venv
+.git
+.env
+.env.*
+demo-out
+tests
+scripts
+docs
+**/__pycache__
+*.m4a

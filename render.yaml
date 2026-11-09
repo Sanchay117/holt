@@ -1,0 +1,20 @@
+# Render blueprint: New -> Blueprint -> pick this repo. Secrets are entered in Render's dashboard, not here.
+services:
+  - type: web
+    name: holt
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/config
+    envVars:
+      - key: OTARI_API_KEY
+        sync: false
+      - key: HOLT_ACCESS_CODE
+        sync: false
+      - key: HOLT_GUARDRAIL_PROFILE
+        value: lakera-guard
+      - key: HOLT_END_USER_BUDGET
+        sync: false
+      - key: HOLT_MCP_SERVER_IDS
+        sync: false
+      - key: HOLT_DEEPWIKI_MCP
+        value: "1"

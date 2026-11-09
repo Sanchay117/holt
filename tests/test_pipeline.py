@@ -203,3 +203,19 @@ def test_refs_and_handles():
     assert end_user_id("@Octo-Cat") == "holt:octo-cat"
     with pytest.raises(ValueError):
         end_user_id("bad handle!")
+
+
+def test_access_code_gate(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+    from holt import server
+
+    monkeypatch.delenv("OTARI_API_KEY", raising=False)
+    monkeypatch.setenv("HOLT_MOCK", "1")
+    monkeypatch.setenv("HOLT_ACCESS_CODE", "s3cret")
+    monkeypatch.chdir(tmp_path)  # no .env here
+    with TestClient(server.create_app()) as client:
+        assert client.get("/api/config").json()["locked"] is True
+        assert client.get("/api/budget", params={"handle": "a"}).status_code == 401
+        assert client.get("/api/budget", params={"handle": "a"}, headers={"X-Holt-Access": "wrong"}).status_code == 401
+        assert client.get("/api/budget", params={"handle": "a"}, headers={"X-Holt-Access": "s3cret"}).status_code == 200
+        assert client.get("/").status_code == 200  # the page itself loads, then asks for the code

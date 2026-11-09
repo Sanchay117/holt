@@ -43,6 +43,7 @@ class Settings:
     max_tool_iterations: int
     run_issue_snippets: bool
     duplicate_candidates: int
+    access_code: str | None = None
     extra: dict = field(default_factory=dict)
 
     @property
@@ -120,4 +121,5 @@ def load_settings(env_file: str | os.PathLike | None = None) -> Settings:
         max_tool_iterations=int(_str("HOLT_MAX_TOOL_ITERATIONS", "6") or 6),
         run_issue_snippets=_bool("HOLT_RUN_ISSUE_SNIPPETS", True),
         duplicate_candidates=int(_str("HOLT_DUPLICATE_CANDIDATES", "40") or 40),
+        access_code=_str("HOLT_ACCESS_CODE"),
     )

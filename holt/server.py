@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -62,6 +63,17 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Holt", lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=WEB), name="static")
 
+    @app.middleware("http")
+    async def access_gate(request: Request, call_next):
+        # A deployed Holt spends its owner's Otari credits: with HOLT_ACCESS_CODE set, every API call needs the code.
+        code = settings.access_code
+        path = request.url.path
+        if code and path.startswith("/api/") and path != "/api/config":
+            given = request.headers.get("x-holt-access", "")
+            if not hmac.compare_digest(given.encode(), code.encode()):
+                return JSONResponse({"error": "This Holt needs an access code."}, status_code=401)
+        return await call_next(request)
+
     def rt(request: Request) -> Runtime:
         return request.app.state.rt
 
@@ -85,6 +97,7 @@ def create_app() -> FastAPI:
             "can_post": bool(s.github_token),
             "samples": SAMPLES,
             "injection_sample": INJECTION_SAMPLE,
+            "locked": bool(s.access_code),
         }
 
     @app.get("/api/budget")

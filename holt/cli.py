@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import json
 import sys
 
@@ -94,8 +95,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="holt", description="Prompt-injection-safe issue triage on open-weight models, through Otari.")
     sub = parser.add_subparsers(dest="cmd", required=True)
     p_serve = sub.add_parser("serve", help="run the web app")
-    p_serve.add_argument("--host", default="127.0.0.1")
-    p_serve.add_argument("--port", type=int, default=8787)
+    p_serve.add_argument("--host", default=os.getenv("HOST", "127.0.0.1"), help="0.0.0.0 to accept outside connections")
+    p_serve.add_argument("--port", type=int, default=int(os.getenv("PORT", "8787")), help="defaults to $PORT, as hosts set it")
     p_serve.add_argument("--mock", action="store_true", help="use the built-in mock gateway even if OTARI_API_KEY is set")
     p_tri = sub.add_parser("triage", help="triage one issue in the terminal")
     p_tri.add_argument("issue", help="GitHub issue URL or owner/repo#123")
@@ -112,8 +113,6 @@ def main(argv: list[str] | None = None) -> int:
             pass
 
     if args.cmd == "serve":
-        import os
-
         import uvicorn
 
         if args.mock:
