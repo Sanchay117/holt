@@ -4,10 +4,11 @@ Deadline: **Nov 11, 11:59 PM** (DoraHacks shows 2026-11-12 04:29 IST). Missing i
 
 ## Checklist
 
-- [ ] Signed up at otari.ai with the email registered on DoraHacks
+- [x] Signed up at otari.ai with the email registered on DoraHacks
 - [ ] Starred https://github.com/mozilla-ai/otari
-- [ ] Repo is public on GitHub, with the `mozfest-devs-wilding` branch pushed
-- [ ] `holt doctor` all green on the real gateway; at least one full live run done
+- [x] Repo is public on GitHub, with the `mozfest-devs-wilding` branch pushed: https://github.com/Sanchay117/holt
+- [x] `holt doctor` all green on the real gateway, locally and on the deployment; live runs done
+- [x] Deployed: https://holt-1.onrender.com (access code in `.env.deploy`; give it to the judges, don't publish it)
 - [x] Demo video: https://youtu.be/57wmDMeDdXs
 - [ ] Otari feedback: a 3–5 min screen recording, written answers, or both. Also no AI.
 - [ ] Any issues or PRs you opened on mozilla-ai/otari
@@ -20,10 +21,12 @@ Deadline: **Nov 11, 11:59 PM** (DoraHacks shows 2026-11-12 04:29 IST). Missing i
 | Project name | Holt |
 | One line | Issue triage for open-source maintainers that resists prompt injection: open-weight agents behind Otari's guardrail, with per-maintainer budgets. |
 | Otari email | *(the one you signed up with)* |
-| Repo + branch | `https://github.com/<you>/holt`, branch `mozfest-devs-wilding` |
-| First Otari commit | `https://github.com/<you>/holt/commit/d2cd875796a78b8f1f87ee1025464b780d08b928` |
+| Repo + branch | https://github.com/Sanchay117/holt, branch `mozfest-devs-wilding` |
+| First Otari commit | https://github.com/Sanchay117/holt/commit/d2cd875796a78b8f1f87ee1025464b780d08b928 |
+| Demo video | https://youtu.be/57wmDMeDdXs |
+| Live app | https://holt-1.onrender.com (access code: in the submission notes only) |
 | Otari features used | Model routing & fallbacks · MCP integrations · Web search & web fetch · Code execution · Budgets & spending limits · Multiple models serving distinct roles · Guardrails · Per-user budgets |
-| Open-weight models | DeepSeek V4.1 Flash (Scout: classify + plan), GLM-5.3 (Researcher: tool calling), DeepSeek V4 Pro (Analyst: code), Writer routing policy over DeepSeek V4 Pro → GLM-5.3 → DeepSeek V4.1 Flash |
+| Open-weight models | DeepSeek V4.1 Flash (Scout: classify + plan), GLM-5.3 (Researcher: tool calling over web search, web fetch and DeepWiki MCP), DeepSeek V4 Pro (Analyst: code; Writer via the `holt-writer` routing policy, which tiers down to DeepSeek V4.1 Flash past 80% budget) |
 | Issues/PRs on Otari | *(list any you open)* |
 
 Before pasting, check that the model names match what `holt doctor` shows Otari actually served.

@@ -8,7 +8,9 @@ Paste a GitHub issue. Holt's agents check it for prompt injection, classify it, 
 
 Built for MozFest **Developers Wilding: Online**, on the `mozfest-devs-wilding` branch.
 
-### ▶ [Watch the demo (3 min)](https://youtu.be/57wmDMeDdXs)
+### ▶ [Watch the demo (3 min)](https://youtu.be/57wmDMeDdXs) · 🌐 [Try it live](https://holt-1.onrender.com)
+
+The live Holt runs on real Otari credits, so it asks for an access code; judges get it with the submission. It's on Render's free plan, so give it up to a minute to wake up.
 
 [![Holt demo: live triage on Otari, a blocked prompt-injection attack, per-user budgets](https://img.youtube.com/vi/57wmDMeDdXs/maxresdefault.jpg)](https://youtu.be/57wmDMeDdXs)
 
