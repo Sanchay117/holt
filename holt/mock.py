@@ -233,7 +233,7 @@ class MockOtari:
         if "otari_web_search" in tools:
             calls.append({"id": f"otari_ws_{uuid.uuid4().hex[:8]}", "type": "web_search", "status": "completed", "query": f"{title} {repo}",
                           "sources": [{"url": f"https://github.com/{repo}/issues?q=is%3Aissue", "title": f"Issues · {repo}", "published_date": None},
-                                      {"url": f"https://docs.otari.ai/llms.txt", "title": "Otari documentation index", "published_date": None}]})
+                                      {"url": "https://docs.otari.ai/llms.txt", "title": "Otari documentation index", "published_date": None}]})
         if "otari_web_fetch" in tools:
             calls.append({"id": f"otari_wf_{uuid.uuid4().hex[:8]}", "type": "web_fetch", "status": "completed", "url": "https://docs.otari.ai/llms.txt"})
         return json.dumps({

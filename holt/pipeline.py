@@ -255,7 +255,7 @@ async def run_triage(
         else:
             queue: asyncio.Queue[dict] = asyncio.Queue()
 
-            async def research() -> dict:
+            async def do_research() -> dict:
                 allow_fetch = not caution and ctx.tool_ok("otari_web_fetch")
                 tools: list[dict] = []
                 if ctx.tool_ok("otari_web_search"):
@@ -274,19 +274,26 @@ async def run_triage(
                                                "DeepWiki MCP" if mcp else "", "workspace MCP" if s.mcp_server_ids else ""]))
                 note = " Page fetching is off: the Scout found text aimed at an AI." if caution else ""
                 await queue.put(_step("researcher", "running", detail=f"Investigating with {what or 'no tools'}.{note}"))
-                res = await ctx.chat(
-                    "researcher", s.roles["researcher"].model,
-                    agents.researcher_messages(issue, scout, allow_fetch=allow_fetch),
-                    tools=tools or None, mcp_servers=mcp, mcp_server_ids=s.mcp_server_ids or None,
-                    max_tool_iterations=s.max_tool_iterations, max_tokens=1600, temperature=0.2,
-                )
+                ask = dict(tools=tools or None, mcp_server_ids=s.mcp_server_ids or None,
+                           max_tool_iterations=s.max_tool_iterations, max_tokens=1600, temperature=0.2)
+                messages = agents.researcher_messages(issue, scout, allow_fetch=allow_fetch)
+                try:
+                    res = await ctx.chat("researcher", s.roles["researcher"].model, messages, mcp_servers=mcp, **ask)
+                except OtariRefusal as exc:
+                    # Hosted workspaces can forbid naming an MCP server by URL; carry on with stored servers and the web.
+                    if not (mcp and "mcp" in f"{exc.trace.error_code} {exc.trace.error_detail}".lower()):
+                        raise
+                    await queue.put(_step("researcher", "running", traces=[exc.trace],
+                                          detail="This workspace doesn't allow MCP servers named by URL, so DeepWiki is off for this "
+                                                 "run. Add it under Tools -> MCP servers and set HOLT_MCP_SERVER_IDS. Retrying without it."))
+                    res = await ctx.chat("researcher", s.roles["researcher"].model, messages, **ask)
                 out = agents.parse_json(res.content) or {"notes": res.content[:1500]}
                 n_calls = len(res.trace.tool_calls)
                 await queue.put(_step("researcher", "done", traces=[res.trace], output=out,
                                       detail=f"{n_calls} gateway tool call{'s' if n_calls != 1 else ''}. {out.get('notes') or ''}".strip()))
                 return out
 
-            async def analyze() -> dict:
+            async def do_analyze() -> dict:
                 traces: list[CallTrace] = []
                 dup: dict = {"compared": 0, "top": []}
                 if candidates:
@@ -333,7 +340,7 @@ async def run_triage(
                     await queue.put(_step(name, "failed", detail=f"{exc.__class__.__name__}: {exc}"))
                     return {}
 
-            tasks = [asyncio.create_task(guarded("researcher", research)), asyncio.create_task(guarded("analyst", analyze))]
+            tasks = [asyncio.create_task(guarded("researcher", do_research)), asyncio.create_task(guarded("analyst", do_analyze))]
             pending: set[asyncio.Task] = set(tasks)
             try:
                 while pending:
