@@ -187,16 +187,22 @@ class Runtime:
                    "not_configured": "The deployment has no backend for it; for search, add an organization search key."}.get(reason, f"In the dashboard: {where}.")
             add(label, ok, "available" if ok else f"not available ({reason or 'no reason given'})", "" if ok else fix)
 
-        try:
-            async with httpx.AsyncClient(timeout=10) as http:
-                r = await http.post(DEEPWIKI_MCP_URL, headers={"Accept": "application/json, text/event-stream"},
-                                    json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
-            add("DeepWiki MCP", r.status_code == 200 and "ask_wiki_question" in r.text,
-                f"{DEEPWIKI_MCP_URL} answered {r.status_code}" if s.deepwiki_mcp else "disabled (HOLT_DEEPWIKI_MCP=0)")
-        except httpx.HTTPError as exc:
-            add("DeepWiki MCP", False, f"unreachable: {exc.__class__.__name__}")
-        if s.mcp_server_ids:
-            add("Workspace MCP servers", True, f"{len(s.mcp_server_ids)} id(s) configured: {', '.join(s.mcp_server_ids)}")
+        if s.deepwiki_mcp:  # DeepWiki named inline by URL (some workspaces forbid that; then use a stored server)
+            try:
+                async with httpx.AsyncClient(timeout=10) as http:
+                    r = await http.post(DEEPWIKI_MCP_URL, headers={"Accept": "application/json, text/event-stream"},
+                                        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+                add("DeepWiki MCP", r.status_code == 200 and "ask_wiki_question" in r.text, f"{DEEPWIKI_MCP_URL} answered {r.status_code}")
+            except httpx.HTTPError as exc:
+                add("DeepWiki MCP", False, f"unreachable: {exc.__class__.__name__}")
+        for sid in s.mcp_server_ids:  # servers stored in the Otari workspace: ask Otari what each one offers
+            try:
+                r = await self.otari._http.get(f"/mcp/servers/{sid}/tools")
+                names = [t.get("name") for t in r.json().get("tools", [])] if r.status_code == 200 else []
+                add("Workspace MCP server", bool(names), (", ".join(names) + " (via Otari)") if names else f"{sid[:8]}… answered {r.status_code}",
+                    "" if names else "Check the server under Tools -> MCP servers.")
+            except (httpx.HTTPError, ValueError) as exc:
+                add("Workspace MCP server", None, f"couldn't list its tools: {exc.__class__.__name__}")
 
         if s.guardrail_profile:
             try:
@@ -206,16 +212,13 @@ class Runtime:
                     ok = s.guardrail_profile in names
                     add("Guardrail profile", ok, f"'{s.guardrail_profile}' {'is served' if ok else 'not found'}; service profiles: {', '.join(map(str, names)) or 'none'}",
                         "" if ok else "Mandate a guardrail under Organization -> Guardrails with this check name.")
-                else:
-                    # Guardrails an organization configures from the catalog (e.g. Lakera) don't appear in this list.
-                    add("Guardrail profile", None, "no deployment guardrails service to list; organization guardrails don't show here, "
-                        "so the block-mode check below is the real test")
+                # else: organization guardrails (e.g. Lakera on hosted Otari) aren't listed there; the block-mode probe below decides.
             except httpx.HTTPError as exc:
                 add("Guardrail profile", None, f"couldn't list profiles: {exc.__class__.__name__}")
             # The real test: does a block-mode request go through? (Hosted answers 502 until a profile exists, otari#2937.)
             try:
                 res = await self.otari.chat(role="guard", model=s.roles["scout"].model, max_tokens=5,
-                                            messages=[{"role": "user", "content": "Reply with: ok"}],
+                                            messages=[{"role": "user", "content": "The weather is nice today."}],
                                             guardrails=[{"profile": s.guardrail_profile, "mode": "block", "on_unavailable": s.guardrail_on_unavailable}])
                 entry = next((g for g in res.trace.guardrails if g.get("profile") == s.guardrail_profile), None)
                 status = entry.get("status") if entry else "no verdict header"
@@ -224,6 +227,11 @@ class Runtime:
             except OtariRefusal as exc:
                 if exc.code in NO_FUNDS:
                     add("Guardrail in block mode", None, "couldn't test: the model call behind it was refused for lack of funds", WALLET_FIX)
+                elif exc.code == "guardrail_violation":
+                    # A refusal proves block mode is enforced; it just means the guardrail also distrusted the probe.
+                    score = next((g.get("score") for g in exc.trace.guardrails), None)
+                    add("Guardrail in block mode", True, "enforcing: it refused the harmless probe too"
+                        + (f" (score {score})" if score is not None else "") + ", so expect some false positives")
                 else:
                     add("Guardrail in block mode", False, f"HTTP {exc.trace.http_status}: {exc.trace.error_detail or exc}",
                         "Hosted Otari refuses block mode until the workspace has a guardrail profile: docs/OTARI_SETUP.md, step 4. "

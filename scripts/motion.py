@@ -362,10 +362,38 @@ def probe(path: Path) -> tuple[int, int, float]:
     return int(size[1]), int(size[2]), int(dur[1]) * 3600 + int(dur[2]) * 60 + float(dur[3])
 
 
+def _piecewise(points: list[tuple[float, float]]):
+    """Monotone piecewise-linear map through (x, y) points; flat beyond the ends."""
+    pts = sorted(points)
+
+    def f(x: float) -> float:
+        if x <= pts[0][0]:
+            return pts[0][1] + (x - pts[0][0])
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+            if x <= x1:
+                return y0 if x1 == x0 else y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+        return pts[-1][1] + (x - pts[-1][0])
+    return f
+
+
 def compose(raw: Path, timeline: dict, out: Path, *, presenter: str, repo: str = "",
-            subtitles: list[tuple[float, float, str]] | None = None) -> Path:
+            subtitles: list[tuple[float, float, str]] | None = None,
+            knots: list[tuple[float, float]] | None = None) -> Path:
+    """knots: (footage time, output time) pairs, e.g. each scene's start in the footage and in the voiceover.
+    Between knots the footage is sped up or slowed down a little so every scene starts on its line."""
     sw, sh, total = probe(raw)
-    comp = Compositor(timeline, (sw, sh), total, presenter, repo, subtitles)
+    out_total = total
+    to_src = to_out = (lambda x: x)
+    if knots:
+        pts = [(0.0, 0.0)] + [(float(a), float(b)) for a, b in knots if 0 < a < total] + [(total, float(knots[-1][1]) if knots[-1][0] >= total - 0.05 else total)]
+        out_total = pts[-1][1]
+        to_out = _piecewise(pts)
+        to_src = _piecewise([(b, a) for a, b in pts])
+        timeline = {**timeline,
+                    "scenes": [{**sc, "start": round(to_out(sc["start"]), 3)} for sc in timeline["scenes"]],
+                    "focus": [{**e, "t": round(to_out(e["t"]), 3)} for e in timeline.get("focus", [])],
+                    "features": [{**e, "t": round(to_out(e["t"]), 3)} for e in timeline.get("features", [])]}
+    comp = Compositor(timeline, (sw, sh), out_total, presenter, repo, subtitles)
     ff = imageio_ffmpeg.get_ffmpeg_exe()
     dec = subprocess.Popen([ff, "-loglevel", "error", "-i", str(raw), "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
                            stdout=subprocess.PIPE)
@@ -375,17 +403,22 @@ def compose(raw: Path, timeline: dict, out: Path, *, presenter: str, repo: str =
                             "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-movflags", "+faststart", str(out)],
                            stdin=subprocess.PIPE)
     size = sw * sh * 3
-    k = 0
+    have, buf = -1, None  # index and pixels of the newest decoded source frame
     try:
-        while True:
-            buf = dec.stdout.read(size)
-            if len(buf) < size:
+        for k in range(int(round(out_total * FPS))):
+            t = k / FPS
+            want = max(0, int(round(to_src(t) * FPS)))
+            while have < want:
+                nxt = dec.stdout.read(size)
+                if len(nxt) < size:
+                    break  # end of footage: hold the last frame
+                buf, have = nxt, have + 1
+            if buf is None:
                 break
-            frame = comp.frame(Image.frombuffer("RGB", (sw, sh), buf, "raw", "RGB", 0, 1), k / FPS)
+            frame = comp.frame(Image.frombuffer("RGB", (sw, sh), buf, "raw", "RGB", 0, 1), t)
             enc.stdin.write(frame.tobytes())
-            k += 1
-            if k % 300 == 0:
-                print(f"    composited {k / FPS:5.0f}s / {total:.0f}s", flush=True)
+            if k and k % 300 == 0:
+                print(f"    composited {t:5.0f}s / {out_total:.0f}s", flush=True)
     finally:
         enc.stdin.close()
         enc.wait()

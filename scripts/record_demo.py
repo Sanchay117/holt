@@ -870,7 +870,9 @@ async def record(args) -> int:
                             "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-movflags", "+faststart", str(mp4)], check=True)
         else:
             print("Motion graphics…", flush=True)
-            motion.compose(raw, timeline, mp4, presenter=args.presenter, repo=args.repo, subtitles=subs)
+            words = json.loads((OUT / "words.json").read_text(encoding="utf-8")) if subs and (OUT / "words.json").exists() else None
+            knots = scene_knots(timeline, slots, words) if slots else None
+            motion.compose(raw, timeline, mp4, presenter=args.presenter, repo=args.repo, subtitles=subs, knots=knots)
         if wav:
             final = prompter.mux(mp4, wav, OUT / "holt-demo-final.mp4")
             print(f"Done: {final} ({mmss(total)}): footage cut to your voiceover" + (", subtitles in holt-demo.srt too." if subs else "."))
@@ -922,6 +924,51 @@ def make_prompter(args) -> int:
     return 0
 
 
+# Which spoken word each highlighted element belongs to: (scene, caption pattern, word pattern).
+CUES = [
+    ("handle", r"Your own budget", r"^budget"),
+    ("walkthrough", r"^MCP", r"^MCP"), ("walkthrough", r"Web search", r"^web"), ("walkthrough", r"sandbox", r"^Python"),
+    ("walkthrough", r"routing policy picks", r"^[Ww]riter"), ("walkthrough", r"Every Otari feature", r"^right"),
+    ("report", r"^Kind", r"^Kind"), ("report", r"reply ready", r"^reply"), ("report", r"Only links", r"^links"),
+    ("attack", r"^Blocked", r"^guardrail"), ("attack", r"^Quarantined", r"^metadata"),
+    ("tierdown", r"tiers down", r"^tiers?"), ("refusal", r"Otari refuses", r"^refuses"),
+    ("refusal", r"Other maintainers", r"^maintainers"), ("doctor", r"^Live checks", r"^[Cc]heck"),
+]
+LEAD = 0.5  # the zoom lands just before the word
+
+
+def scene_knots(timeline: dict, slots: list[dict], words: list | None = None) -> list[tuple[float, float]]:
+    """(footage time, output time) pairs: each scene starts on its line, and each highlight on the word that names it."""
+    start_of = {s["key"]: s["start"] for s in slots}
+    end_of = {s["key"]: s["end"] for s in slots}
+    knots = [(sc["start"], start_of[sc["key"]]) for sc in timeline["scenes"] if sc["key"] in start_of and sc["start"] > 0]
+    total_out = slots[-1]["end"] if slots else timeline["total"]
+    if words:
+        bounds = [(sc["key"], sc["start"]) for sc in timeline["scenes"]] + [("_end", timeline["total"])]
+        for (key, f0), (_, f1) in zip(bounds, bounds[1:]):
+            if key not in start_of:
+                continue
+            spoken = [w for w in words if start_of[key] <= w[0] < end_of[key]]
+            focus = [e for e in timeline.get("focus", []) if f0 <= e["t"] < f1 and e.get("caption")]
+            after = start_of[key]
+            for scene, cap_re, word_re in CUES:
+                if scene != key:
+                    continue
+                ev = next((e for e in focus if re.search(cap_re, e["caption"])), None)
+                w = next((w for w in spoken if w[0] >= after and re.search(word_re, w[2].strip(".,:;!?'\""))), None)
+                if ev and w:
+                    knots.append((ev["t"], max(start_of[key], w[0] - LEAD)))
+                    after = w[0]
+    knots.sort()
+    # keep the map monotone and the speed sane (between 0.3x and 3.5x of real time)
+    kept, prev = [], (0.0, 0.0)
+    for a, b in knots:
+        if a > prev[0] + 0.2 and b > prev[1] + 0.1 and 0.3 <= (b - prev[1]) / (a - prev[0]) <= 3.5:
+            kept.append((a, b))
+            prev = (a, b)
+    return kept + [(timeline["total"], total_out)]
+
+
 def voice_and_subs(voice: Path, go: float, with_subs: bool) -> tuple[Path, list]:
     """Clean and level the voice onto the video timeline, then (optionally) transcribe it into subtitles."""
     print("Voice: cleaning and levelling…", flush=True)
@@ -970,7 +1017,11 @@ def main() -> int:
         if a.voice:
             go = a.offset if a.offset is not None else prompter.find_go(Path(a.voice))
             wav, subs = voice_and_subs(Path(a.voice), go if go is not None else -0.3, not a.no_subtitles)
-        out = motion.compose(OUT / "holt-demo-raw.mp4", timeline, OUT / "holt-demo.mp4", presenter=a.presenter, repo=a.repo, subtitles=subs)
+        plan = json.loads((OUT / "script.json").read_text(encoding="utf-8")) if a.voice else None
+        words = json.loads((OUT / "words.json").read_text(encoding="utf-8")) if (OUT / "words.json").exists() else None
+        knots = scene_knots(timeline, plan["scenes"], words) if plan else None
+        out = motion.compose(OUT / "holt-demo-raw.mp4", timeline, OUT / "holt-demo.mp4", presenter=a.presenter, repo=a.repo,
+                             subtitles=subs, knots=knots)
         if wav:
             out = prompter.mux(out, wav, OUT / "holt-demo-final.mp4")
         print(f"Done: {out}")
