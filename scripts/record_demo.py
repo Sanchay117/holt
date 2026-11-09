@@ -39,9 +39,10 @@ from playwright.async_api import Page, async_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import prompter  # noqa: E402  (sits next to this script)
+import motion  # noqa: E402  (sits next to this script)
+import prompter  # noqa: E402
 OUT = ROOT / "demo-out"
-W, H, SCALE = 1280, 720, 1.5  # CSS viewport; frames come out at 1920x1080
+W, H, SCALE = 1280, 720, 2.0  # CSS viewport; frames come out at 2560x1440, headroom for zooming in
 
 OVERLAY_JS = r"""
 (() => {
@@ -129,6 +130,8 @@ class Recorder:
         self.segments: list[tuple[float, float, float]] = []  # (start, end, playback rate); rate 0 = cut
         self.scenes: list[Scene] = []
         self.freezes: dict[float, float] = {}  # hold the frame shown just before this moment for N seconds
+        self.focus_events: list[dict] = []  # {t, box (css px) | None, caption, zoom}; box None = back to the full view
+        self.feature_events: list[dict] = []  # {t, features}: rubric features the footage is showing
         self._paused_at: float | None = None
         self.t0 = self.t_end = 0.0
 
@@ -156,6 +159,16 @@ class Recorder:
         self.scenes.append(s)
         print(f"  scene: {title}", flush=True)
         return s
+
+    def focus(self, box: dict | None, caption: str = "", zoom: float = 1.0) -> None:
+        self.focus_events.append({"t": time.time(), "box": box, "caption": caption, "zoom": zoom})
+
+    def unfocus(self) -> None:
+        if self.focus_events and self.focus_events[-1]["box"] is not None:
+            self.focus(None)
+
+    def light(self, *features: str) -> None:
+        self.feature_events.append({"t": time.time(), "features": list(features)})
 
     def pause(self) -> None:
         self._paused_at = time.time()
@@ -249,12 +262,14 @@ class Recorder:
             except OSError:
                 shutil.copyfile(self.frames[j][1], target)
         cmd = [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-framerate", "30", "-i", str(seq / "%06d.jpg"),
-               "-vf", "scale=1920:1080:flags=lanczos:in_range=full:out_range=limited,format=yuv420p",
+               "-vf", "scale=iw:ih:in_range=full:out_range=limited,format=yuv420p",
                "-color_range", "tv", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
-               "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-movflags", "+faststart", str(mp4)]
+               "-c:v", "libx264", "-preset", "medium", "-crf", "17", "-movflags", "+faststart", str(mp4)]
         subprocess.run(cmd, check=True)
         for s in self.scenes:
             s.t = max(0.0, self.out(s.t) - base)
+        for e in self.focus_events + self.feature_events:
+            e["t"] = round(max(0.0, self.out(e["t"]) - base), 3)
         return end
 
 
@@ -280,12 +295,26 @@ class Director:
 
     async def begin(self, key: str, title: str) -> Scene:
         await self.pad()
+        self.rec.unfocus()
         return self.rec.scene(key, title)
 
     async def hold(self, seconds: float) -> None:
         await asyncio.sleep(seconds)
 
-    async def point(self, selector: str, click: bool = False, settle: float = 0.6) -> bool:
+    async def point(self, selector: str, click: bool = False, settle: float = 0.6, *, callout: str = "",
+                    zoom: float = 0.0, zoom_on: str | None = None, features: tuple[str, ...] = ()) -> bool:
+        """Move the cursor to an element (and click it). With zoom/callout, the motion pass zooms in and captions it."""
+        ok = await self._point(selector, click, settle)
+        if ok and (zoom or callout):
+            await asyncio.sleep(0.15)
+            box = await self.page.locator(zoom_on or selector).first.bounding_box()
+            if box:
+                self.rec.focus(box, callout, zoom or 1.0)
+        if ok and features:
+            self.rec.light(*features)
+        return ok
+
+    async def _point(self, selector: str, click: bool = False, settle: float = 0.6) -> bool:
         loc = self.page.locator(selector).first
         if await loc.count() == 0 or not await loc.is_visible():
             return False
@@ -309,6 +338,7 @@ class Director:
         await self.page.locator(selector).press_sequentially(text, delay=70)
 
     async def scroll_to(self, selector: str, block: str = "center", pause: float = 1.0) -> bool:
+        self.rec.unfocus()
         ok = await self.page.evaluate(
             "([s, b]) => { const el = document.querySelector(s); if (!el) return false; el.scrollIntoView({behavior: 'smooth', block: b}); return true; }",
             [selector, block])
@@ -316,10 +346,12 @@ class Director:
         return ok
 
     async def scroll_top(self) -> None:
+        self.rec.unfocus()
         await self.page.evaluate("() => window.scrollTo({top: 0, behavior: 'smooth'})")
         await asyncio.sleep(1.0)
 
     async def scroll_by(self, dy: int, pause: float = 1.0) -> None:
+        self.rec.unfocus()
         await self.page.evaluate("(dy) => window.scrollBy({top: dy, behavior: 'smooth'})", dy)
         await asyncio.sleep(pause)
 
@@ -396,15 +428,15 @@ async def direct(page: Page, rec: Recorder, args, url: str) -> None:
     await page.evaluate("() => { try { localStorage.removeItem('holt.handle'); } catch {} document.querySelector('#handle').value = ''; }")
     await d.hold(3)
     await d.point(".brand-sub")
-    await d.hold(3)
+    await d.hold(2.5)
     for i in range(1, 6):  # walk the "How a run works" list while the intro is spoken
         await d.point(f".how li:nth-child({i})")
-        await d.hold(2.2)
+        await d.hold(2.0)
 
     s = await d.begin("handle", "Maintainer handle and per-user budget")
     await d.type_into("#handle", args.handle)
-    await d.hold(1.5)
-    await d.point("#budget")
+    await d.hold(1.2)
+    await d.point("#budget", callout="Your own budget: Otari bills you as an end user", zoom=1.6, features=("per_user",))
     await d.hold(3)
     s.facts = await d.facts()
 
@@ -420,31 +452,43 @@ async def direct(page: Page, rec: Recorder, args, url: str) -> None:
 
     s = await d.begin("walkthrough", "What Otari did, step by step")
     await d.scroll_to("#step-guard")
-    await d.hold(3)
+    await d.point("#step-guard .verdict", callout="Otari's guardrail checked the issue before any model read it",
+                  zoom=1.6, zoom_on="#step-guard", features=("guardrails",))
+    await d.hold(2.3)
     await d.scroll_to("#step-scout")
-    await d.hold(3)
+    await d.point("#step-scout .models", callout="Scout: an open-weight model, served through Otari",
+                  zoom=1.6, zoom_on="#step-scout", features=("open_weight", "roles"))
+    await d.hold(2.3)
     await d.scroll_to("#step-researcher", block="start")
-    if await d.point("#step-researcher .tool.mcp > summary", click=True):
-        await d.hold(4)
-    if await d.point("#step-researcher .tool:not(.mcp) > summary", click=True):
-        await d.hold(3.5)
+    if await d.point("#step-researcher .tool.mcp > summary", click=True, callout="MCP: DeepWiki explains the repo's code, called by Otari",
+                     zoom=1.5, zoom_on="#step-researcher .tool.mcp", features=("mcp",)):
+        await d.hold(3.2)
+    if await d.point("#step-researcher .tool:not(.mcp) > summary", click=True, callout="Web search, run by Otari's gateway",
+                     zoom=1.5, zoom_on="#step-researcher .tool:not(.mcp)", features=("web",)):
+        await d.hold(2.8)
     await d.scroll_to("#step-analyst", block="start")
-    await d.hold(2.5)
-    if await d.point("#step-analyst .tool.code > summary", click=True):
-        await d.hold(4)
+    await d.hold(1.2)
+    if await d.point("#step-analyst .tool.code > summary", click=True, callout="Duplicate scoring runs in Otari's code sandbox",
+                     zoom=1.45, zoom_on="#step-analyst .tool.code", features=("code",)):
+        await d.hold(3.2)
     await d.scroll_to("#step-writer")
-    await d.hold(3)
-    await d.point("#features")
-    await d.hold(5)
+    await d.point("#step-writer .models", callout="Writer: the holt-writer routing policy picks the model",
+                  zoom=1.6, zoom_on="#step-writer", features=("routing",))
+    await d.hold(2.3)
+    await d.point("#features", callout="Every Otari feature this run used, from Otari's own responses", zoom=1.6)
+    await d.hold(4)
     s.facts = await d.facts()
 
     s = await d.begin("report", "The triage report")
     await d.scroll_to("#report", block="start")
-    await d.hold(5)
-    await d.scroll_by(360)
+    await d.point("#report .summary", callout="Kind, severity, labels and the likely code area", zoom=1.25, zoom_on="#report .report")
     await d.hold(4)
-    await d.scroll_by(360)
-    await d.hold(4)
+    await d.scroll_to("#report .comment")
+    await d.point("#report .comment .reply-preview", callout="A reply ready to post on GitHub", zoom=1.45, zoom_on="#report .comment")
+    await d.hold(3.5)
+    await d.scroll_to("#report .sources")
+    await d.point("#report .sources", callout="Only links a tool really returned: invented ones are dropped", zoom=1.7)
+    await d.hold(3.5)
     s.facts = await d.facts()
 
     s = await d.begin("attack", "Prompt-injection attack")
@@ -452,11 +496,14 @@ async def direct(page: Page, rec: Recorder, args, url: str) -> None:
     await d.point("#inject", click=True)
     await d.run()
     await d.scroll_to("#step-guard")
-    await d.hold(5)
+    await d.point("#step-guard .verdict", callout="Blocked by Otari's guardrail before any model read it",
+                  zoom=1.7, zoom_on="#step-guard", features=("guardrails",))
+    await d.hold(4)
     await d.scroll_to("#step-researcher")
-    await d.hold(2.5)
+    await d.hold(2)
     await d.scroll_to("#report", block="start")
-    await d.hold(6)
+    await d.point("#report .banner", callout="Quarantined: no agent with tools ever saw it", zoom=1.5)
+    await d.hold(4.5)
     s.facts = await d.facts()
 
     wanted = getattr(args, "scenes", None)  # set when shooting to a voiceover script
@@ -481,8 +528,8 @@ async def direct(page: Page, rec: Recorder, args, url: str) -> None:
     if args.budget_runs > 0 and (wanted is None or "budget" in wanted):
         s = await d.begin("budget", "Per-user budget: tier-down and refusal")
         await d.scroll_top()
-        await d.point("#budget")
-        await d.hold(3)
+        await d.point("#budget", callout="Per-user budget, nearly spent", zoom=1.6, features=("per_user",))
+        await d.hold(2.5)
         pct = await budget_pct(d, args.handle)
         s.notes.append(f"budget at {pct:.0f}% when the scene began" if pct is not None else "per-user budget unavailable")
         tiered = refused = False
@@ -501,7 +548,9 @@ async def direct(page: Page, rec: Recorder, args, url: str) -> None:
                 tiered = True
                 t = await d.begin("tierdown", "Budget past 80%: the Writer tiers down")
                 await d.scroll_to("#step-writer")
-                await d.hold(5)
+                await d.point("#step-writer .models", callout="Past 80%: the routing policy tiers down to a cheaper model",
+                              zoom=1.6, zoom_on="#step-writer", features=("budgets", "routing"))
+                await d.hold(4.5)
                 t.facts = await d.facts()
                 t.notes.append(f"budget was at {pct:.0f}% before this run")
             else:
@@ -519,10 +568,10 @@ async def direct(page: Page, rec: Recorder, args, url: str) -> None:
             await submit_pasted(d, BENIGN, visible=True)
             await d.run(follow=False)
             await d.scroll_top()
-            await d.point("#alert")
-            await d.hold(4)
-            await d.point("#budget")
-            await d.hold(2)
+            await d.point("#alert", callout="Otari refuses: budget_exceeded, scoped to this maintainer", zoom=1.5, features=("budgets",))
+            await d.hold(3.2)
+            await d.point("#budget", callout="Other maintainers keep their own budgets", zoom=1.6)
+            await d.hold(1.5)
             r.facts = await d.facts()
         else:
             s.notes.append("the budget never ran out; raise --budget-runs or lower the end-user budget")
@@ -532,9 +581,11 @@ async def direct(page: Page, rec: Recorder, args, url: str) -> None:
     await d.point("#doctor-btn", click=True)
     async with rec.fast(args.speed):
         await page.wait_for_selector("#doctor-body .check", timeout=180000)
-    await d.hold(6)
-    await page.evaluate("() => { const b = document.querySelector('#doctor'); b.scrollTo({top: b.scrollHeight, behavior: 'smooth'}); }")
+    await d.point("#doctor .doctor-body", callout="Live checks against Otari: models, policy, tools, guardrail, budgets", zoom=1.15, zoom_on="#doctor")
     await d.hold(4)
+    rec.unfocus()
+    await page.evaluate("() => { const b = document.querySelector('#doctor'); b.scrollTo({top: b.scrollHeight, behavior: 'smooth'}); }")
+    await d.hold(2.2)
     s.facts = {"doctor": await page.evaluate("() => [...document.querySelectorAll('#doctor-body .check')].map(c => c.innerText.replace(/\\s+/g, ' ').trim())")}
     await page.locator("#doctor .dialog-head button").click()
 
@@ -781,8 +832,13 @@ async def record(args) -> int:
         print(f"Recording against the {'MOCK' if cfg['mock'] else 'real Otari'} gateway…", flush=True)
 
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(channel=args.browser, headless=not args.show,
-                                               args=["--hide-scrollbars", "--force-color-profile=srgb"])
+            # A real (headed) window: headless Chrome's screencast only ever delivers 1280x720 frames, whatever the scale.
+            # It's parked off-screen unless --show, with background throttling off so it keeps rendering.
+            flags = ["--hide-scrollbars", "--force-color-profile=srgb", "--disable-backgrounding-occluded-windows",
+                     "--disable-renderer-backgrounding", "--disable-background-timer-throttling"]
+            if not args.show:
+                flags.append("--window-position=-4000,0")
+            browser = await pw.chromium.launch(channel=args.browser, headless=False, args=flags)
             ctx = await browser.new_context(viewport={"width": W, "height": H}, device_scale_factor=SCALE, color_scheme="dark")
             await ctx.add_init_script(OVERLAY_JS)
             page = await ctx.new_page()
@@ -795,16 +851,25 @@ async def record(args) -> int:
                 await rec.stop()
                 await browser.close()
 
-        mp4 = OUT / "holt-demo.mp4"
+        raw, mp4 = OUT / "holt-demo-raw.mp4", OUT / "holt-demo.mp4"
         if slots:
             for w in rec.fit(slots):
                 print(f"  note: {w}")
         print("Encoding…", flush=True)
-        total = rec.encode(mp4)
-        (OUT / "timeline.json").write_text(json.dumps([{"key": s.key, "title": s.title, "start": round(s.t, 2), "notes": s.notes,
-                                                        "facts": s.facts} for s in rec.scenes], indent=1), encoding="utf-8")
+        total = rec.encode(raw)
+        timeline = {"total": round(total, 2),
+                    "scenes": [{"key": s.key, "title": s.title, "start": round(s.t, 2), "notes": s.notes, "facts": s.facts}
+                               for s in rec.scenes],
+                    "focus": rec.focus_events, "features": rec.feature_events}
+        (OUT / "timeline.json").write_text(json.dumps(timeline, indent=1), encoding="utf-8")
         if not args.keep_frames:
             shutil.rmtree(frames, ignore_errors=True)
+        if args.no_motion:
+            subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-i", str(raw), "-vf", "scale=1920:1080:flags=lanczos",
+                            "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-movflags", "+faststart", str(mp4)], check=True)
+        else:
+            print("Motion graphics…", flush=True)
+            motion.compose(raw, timeline, mp4, presenter=args.presenter, repo=args.repo)
         if args.voice:
             final = prompter.align_and_mux(mp4, Path(args.voice), OUT / "holt-demo-final.mp4", go=go)
             print(f"Done: {final} ({mmss(total)}): footage cut to your voiceover.")
@@ -856,6 +921,13 @@ def make_prompter(args) -> int:
     return 0
 
 
+def _git_name() -> str:
+    try:
+        return subprocess.run(["git", "config", "user.name"], capture_output=True, text=True, cwd=ROOT).stdout.strip() or "Holt"
+    except OSError:
+        return "Holt"
+
+
 def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
@@ -868,6 +940,21 @@ def main() -> int:
         p.add_argument("--offset", type=float, help="seconds into the recording where the countdown hit 0:00")
         a = p.parse_args()
         return mux(a.video, a.voice, a.out, a.offset)
+    if len(sys.argv) > 1 and sys.argv[1] == "compose":
+        p = argparse.ArgumentParser(prog="record_demo.py compose", description="Redo the motion pass on demo-out/holt-demo-raw.mp4.")
+        p.add_argument("cmd")
+        p.add_argument("--presenter", default=_git_name())
+        p.add_argument("--repo", default="")
+        p.add_argument("--voice", help="also lay this voiceover on the result")
+        p.add_argument("--offset", type=float)
+        a = p.parse_args()
+        timeline = json.loads((OUT / "timeline.json").read_text(encoding="utf-8"))
+        out = motion.compose(OUT / "holt-demo-raw.mp4", timeline, OUT / "holt-demo.mp4", presenter=a.presenter, repo=a.repo)
+        if a.voice:
+            go = a.offset if a.offset is not None else prompter.find_go(Path(a.voice))
+            out = prompter.align_and_mux(out, Path(a.voice), OUT / "holt-demo-final.mp4", go=go or -0.3)
+        print(f"Done: {out}")
+        return 0
     if len(sys.argv) > 1 and sys.argv[1] == "prompter":
         p = argparse.ArgumentParser(prog="record_demo.py prompter", description="Make the teleprompter video and voiceover script.")
         p.add_argument("cmd")
@@ -887,6 +974,9 @@ def main() -> int:
     p.add_argument("--allow-mock", action="store_true", help="record even on the mock gateway (dry run)")
     p.add_argument("--keep-frames", action="store_true")
     p.add_argument("--voice", help="your voiceover recording: shoot the footage to its timing (needs `prompter` first)")
+    p.add_argument("--no-motion", action="store_true", help="skip the motion-graphics pass (plain 1080p recording)")
+    p.add_argument("--presenter", default=_git_name(), help="name on the opening lower-third")
+    p.add_argument("--repo", default="", help="repo URL for the end card")
     p.add_argument("--offset", type=float, help="with --voice: seconds into the recording where the countdown hit 0:00")
     return asyncio.run(record(p.parse_args()))
 
