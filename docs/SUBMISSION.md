@@ -40,7 +40,12 @@ python scripts/record_demo.py prompter            # demo-out/teleprompter.mp4 + 
    ```bash
    python scripts/record_demo.py --handle your-github-name --voice path/to/recording.mp4
    ```
-   It finds 0:00 in your recording from the beeps (or pass `--offset SECONDS`), drives the app on the real gateway, fits each scene to its slot in your voiceover (fast-forwarding agent waits with an on-screen badge, holding the last frame of short scenes, cutting runs that only drain the budget), and writes `demo-out/holt-demo-final.mp4` with your audio on it.
+   It finds 0:00 in your recording from the beeps (or pass `--offset SECONDS`), drives the app on the real gateway (a headed Chrome window, captured at 2560×1440), fits each scene to its slot in your voiceover (fast-forwarding agent waits with an on-screen badge, holding the last frame of short scenes, cutting runs that only drain the budget), and writes `demo-out/holt-demo-final.mp4` with your audio on it. Along the way it:
+   - levels your voice (noise reduction before gain, compression, two-pass normalisation to -14 LUFS),
+   - transcribes it locally with Whisper into subtitles (`demo-out/holt-demo.srt` too),
+   - adds the motion pass: framing, zooms and captions timed to the words that mention them, chapter titles, a rubric tracker, a lower-third and an end card.
+
+   `python scripts/record_demo.py compose --voice path/to/recording` redoes the edit on the last raw take without spending credits. `--no-motion` and `--no-subtitles` turn those passes off.
 
 The script names your configured models but nothing run-specific (no costs or scores), so it stays true for whichever run gets filmed. The fallback drill is in it only if `HOLT_CHAOS_WRITER_MODEL` was set when you made the teleprompter (`--fallback` / `--no-fallback` to choose); `--budget-runs 0` leaves the budget scenes out. Decide both before you record your voice.
 
